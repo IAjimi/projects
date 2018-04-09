@@ -4,8 +4,8 @@
 library("tidyverse")
 library(fiftystater)
 
-###loading data
-us_avg_tuition <- read_excel("C:/Users/ia767/Downloads/us_avg_tuition.xlsx")
+###loading data (from https://github.com/rfordatascience/tidytuesday/tree/master/data)
+us_avg_tuition <- read_excel("us_avg_tuition.xlsx")
 
 ###cleaning/shaping data
 #changing column names
