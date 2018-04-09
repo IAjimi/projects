@@ -3,7 +3,7 @@ library("cowplot")
 library("tidyverse")
 library(fiftystater)
 
-tidy_tuesday_week2 <- read_excel("C:/Users/ia767/Downloads/tidy_tuesday_week2.xlsx")
+tidy_tuesday_week2 <- read_excel("tidy_tuesday_week2.xlsx") #from https://github.com/rfordatascience/tidytuesday
 nfl <- tidy_tuesday_week2
 names(nfl) <- c("year", "CB", "DL", "LB", "OL", "QB", "RB", "S", "ST", "TE", "WR")
 
