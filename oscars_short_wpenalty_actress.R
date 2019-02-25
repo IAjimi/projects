@@ -31,9 +31,9 @@ oscars <- left_join(oscars, others, by = c("category", "film", "name", "year"))
 names(oscars)[names(oscars) == 'Golden Globe'] <- "GG" #renaming golden globes
 
 #implementing -1 penalty
-oscars$BAFTA[is.na(oscars$BAFTA)] <- -1
-oscars$GG[is.na(oscars$GG)] <- -1
-oscars$Guild[is.na(oscars$Guild)] <- -1 #choice! tech. SAG only started in 1995
+oscars$BAFTA[is.na(oscars$BAFTA)] <- 0
+oscars$GG[is.na(oscars$GG)] <- 0
+oscars$Guild[is.na(oscars$Guild)] <- 0 #choice! tech. SAG only started in 1995
 
 
 ### Probit ####
