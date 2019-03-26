@@ -1,9 +1,22 @@
 March 26, 2019 -- 11:20 AM
+**Two prediction models w/ same variables (collected from Kenpom & ESPN)
+
+*R Logit Model (71% Test CV Score)
+Duke - Virgina Tech = Duke wins (90% prob)
+LSU - Michigan State = Michigan St. wins (66% prob)  (difference)
+Virginia - Oregon = Virginia wins (94% prob)
+Purdue - Tennessee = Tennessee wins (55% prob)
+Florida State - Gonzaga = Gonzaga wins (58% prob)  (difference)
+Texas Tech - Michigan = Texas Tech wins (87% prob)
+Houston - Kentucky = Houston wins (69% prob)
+Auburn - North Carolina = North Carolina wins (52% prob)  (difference)
+
+*Python SVC Model (82% Test CV Score)
 Duke - Virgina Tech = Duke wins
-LSU - Michigan State = Michigan St. wins
+LSU - Michigan State = LSU wins (difference)
 Virginia - Oregon = Virginia wins
 Purdue - Tennessee = Tennessee wins
-Florida State - Gonzaga = Gonzaga wins
+Florida State - Gonzaga = Florida St. wins (difference)
 Texas Tech - Michigan = Texas Tech wins
 Houston - Kentucky = Houston wins
-Auburn - North Carolina = North Carolina wins
+Auburn - North Carolina = Auburn wins (difference)
