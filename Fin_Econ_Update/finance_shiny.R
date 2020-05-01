@@ -15,10 +15,9 @@ ui <- fluidPage(
       h1("Return, Volatilities & Correlations Calculator"),
       p("Compute the returns, volatilities & correlations of your portfolio in just a few clicks!"), 
       p("Note: loading more than 5 stocks at once will slow down the process, due to underlying query
-        restrictions"), 
-      br(),
+        restrictions."), 
       
-      h2("Setup"),
+      h3("Setup"),
       helpText("Select index funds from the list below or add  desired stocks using their stock
                ticker."),
       
@@ -35,13 +34,13 @@ ui <- fluidPage(
                 value = NULL) ,
       
       dateRangeInput("dates", strong("Date range:"),
-                     start = "2020-01-01",
+                     start = "2019-01-01",
                      end   = Sys.Date()),
       
       br(),
-      h4('Methodology'),
+      h3('Methodology'),
       p("The summary statistics are computed using the day-on-day log difference
-                                of stock prices (i.e., daily returns). The volatility was computed by taking the
+                                of stock prices (i.e., daily returns). The volatility is computed by taking the
                                 square root of the number of open market days x the standard deviation in daily returns.")
     ),
     
