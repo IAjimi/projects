@@ -1,6 +1,6 @@
-## ADDING DEMOGRAPHICS
+## COMPLETING EDUCATIONAL ATTAINMENT
 ## ADDING URBAN % POP
-
+## ADDING STATE GDP
 
 ## SETUP ####
 ### LOADING LIBRARIES
@@ -74,6 +74,31 @@ bea_personal_income_state <- bea_personal_income_state %>%
 
 president <- president %>%
   left_join(bea_personal_income_state, by = c("year", "state"))
+
+## Educational Attainment ####
+## HS
+high_school_degree <- read_csv("C:/Users/ia767/Downloads/table05a.csv", 
+                            skip = 9)
+high_school_degree <- high_school_degree[c(13:63), ]
+high_school_degree <- high_school_degree %>%
+  select(state = `Geographic area`, `1970`, `1980`, `1990`, `2000`) %>%
+  mutate(state = str_replace(state, '..', '')) %>%
+  gather(year, per_hs_degree, -state)
+
+## BA
+bachelor_degree <- read_csv("C:/Users/ia767/Downloads/table06a.csv", 
+                                skip = 8)
+bachelor_degree <- bachelor_degree[c(9:59), ]
+bachelor_degree <- bachelor_degree %>%
+  select(state = `Geographic area`, `1970`, `1980`, `1990`, `2000`) %>%
+  mutate(state = str_replace(state, '..', '')) %>%
+  gather(year, per_bachelor_degree, -state)
+
+## Combined
+degree_df <- full_join(high_school_degree, bachelor_degree, by= c('state', 'year'))
+degree_df
+
+####################################### HERE
 
 ## Census Data (https://www2.census.gov/programs-surveys/popest/datasets/) ####
 ### 1970: Race of Population by County
@@ -346,7 +371,7 @@ partial_reg <- lm(pres_percent_vote ~ year + state +
                     mean_house_percent_vote + sd_house_percent_vote +
                     population + per_capita_personal_income +
                     per_white + per_black + per_fem + per_white_fem + per_black_fem,
-          data = filter(president, year != 2016))
+          data = filter(president, year != 2012))
 summary(partial_reg)
 
 partial_reg <- lm(pres_percent_vote ~ year + state + 
@@ -355,15 +380,15 @@ partial_reg <- lm(pres_percent_vote ~ year + state +
                     mean_house_percent_vote +
                     population + per_capita_personal_income +
                     per_black,
-                  data = filter(president, year >= 1990))
+                  data = filter(president, year != 2012))
 summary(partial_reg)
 
 
 ## Comparing Predictions (Vote Share)
 predicted_res <- predict(partial_reg, 
-        filter(president, year == 2016 & !(state %in% c('Alaska', 'Arizona', 'District of Columbia','Idaho',  'Hawaii'))))
+        filter(president, year == 2012 & !(state %in% c('Alaska', 'Arizona', 'District of Columbia','Idaho',  'Hawaii'))))
 
-actual_res <- filter(president, year == 2016 & !(state %in% c('Alaska', 'Arizona', 'District of Columbia','Idaho',  'Hawaii')))$pres_percent_vote
+actual_res <- filter(president, year == 2012 & !(state %in% c('Alaska', 'Arizona', 'District of Columbia','Idaho',  'Hawaii')))$pres_percent_vote
 
 president %>%
   filter(year == 2016 & !(state %in% c('Alaska', 'Arizona', 'District of Columbia','Idaho',  'Hawaii'))) %>%
@@ -385,7 +410,7 @@ lm_error[lm_error %in% c(1, -1)]
 president <- president %>%
   mutate(win_dummy = if_else(pres_percent_vote > 50, 1, 0))
 
-reg <- glm(win_dummy ~pres_percent_vote ~ year + state + 
+reg <- glm(win_dummy ~ year + state + 
              incumbent_party +
              past_participation + 
              mean_senate_percent_vote +
