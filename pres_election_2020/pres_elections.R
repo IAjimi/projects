@@ -3,15 +3,19 @@
 ## ADDING STATE GDP
 
 ## SETUP ####
+getwd()
+setwd("C:/Users/ia767/Documents/pres_elections")
+
 ### LOADING LIBRARIES
 library(readr)
 library(readxl)
 library(tidyverse)
 
 ### LOADING DATA
-senate <- read_csv("C:/Users/ia767/Downloads/dataverse_files/1976-2018-senate.csv")
-house <- read_csv("C:/Users/ia767/Downloads/house_dataverse_files/1976-2018-house2.csv")
-president <- read_csv("C:/Users/ia767/Downloads/president_dataverse_files/1976-2016-president.csv")
+senate <- read_csv("1976-2018-senate.csv")
+house <- read_csv("1976-2018-house2.csv")
+president <- read_csv("1976-2016-president.csv")
+election_years <- distinct(president, year)$year
 
 ## ELECTORAL DATA ####
 senate <- senate %>% 
@@ -61,67 +65,98 @@ president <- president %>%
   ungroup()
 
 ## ECONOMIC DATA ####
-bea_personal_income_state <- read_excel("C:/Users/ia767/Downloads/bea_personal_income_state.xls", 
+bea_personal_income_state <- read_excel("bea_personal_income_state.xls", 
                                         skip = 5)
 
 bea_personal_income_state <- bea_personal_income_state %>% 
   gather(year, val, `1976`:`2019`) %>%
   mutate(Description = if_else(Description == 'Population (persons) 1/', 'population', 'per_capita_personal_income'),
+         GeoName = str_replace_all(GeoName, ' \\*', ''),
          year = as.numeric(year)) %>% # gather changed it to character
   select(-LineCode) %>% # otherwise spread doesn't fill properly
   spread(Description, val) %>%
-  select(state = GeoName, year, per_capita_personal_income, population) 
+  select(state = GeoName, year, per_capita_personal_income, population) %>%
+  filter(!is.na(per_capita_personal_income))
 
 president <- president %>%
   left_join(bea_personal_income_state, by = c("year", "state"))
 
+## Add YoY Change
+president <- president %>%
+  split(.$state) %>%
+  map(mutate, yoy_per_cap_income_change = per_capita_personal_income / lag(per_capita_personal_income)) %>%
+  map(mutate, yoy_pop_change = population / lag(population)) %>%
+  do.call(rbind.data.frame, .)
+
 ## Educational Attainment ####
-## HS
-high_school_degree <- read_csv("C:/Users/ia767/Downloads/table05a.csv", 
-                            skip = 9)
+## HS (1970:2000)
+high_school_degree <- read_csv("table05a.csv", skip = 9)
 high_school_degree <- high_school_degree[c(13:63), ]
 high_school_degree <- high_school_degree %>%
   select(state = `Geographic area`, `1970`, `1980`, `1990`, `2000`) %>%
   mutate(state = str_replace(state, '..', '')) %>%
   gather(year, per_hs_degree, -state)
 
-## BA
-bachelor_degree <- read_csv("C:/Users/ia767/Downloads/table06a.csv", 
-                                skip = 8)
+# Changing dates so they'll map to election years in president df
+for (yr in election_years[election_years <= 2000]) {
+  
+  decade_yr <- substring(yr, 1, 3) # get decade
+  
+  relevant_data <- high_school_degree %>% 
+    filter(substring(year, 1, 3) == decade_yr) %>%
+    mutate(year = as.numeric(yr))
+  
+  high_school_degree <- rbind(high_school_degree, relevant_data)
+}
+
+
+## BA (1970:2000)
+bachelor_degree <- read_csv("table06a.csv", skip = 8)
 bachelor_degree <- bachelor_degree[c(9:59), ]
 bachelor_degree <- bachelor_degree %>%
   select(state = `Geographic area`, `1970`, `1980`, `1990`, `2000`) %>%
   mutate(state = str_replace(state, '..', '')) %>%
   gather(year, per_bachelor_degree, -state)
 
-## Combined
-degree_df <- full_join(high_school_degree, bachelor_degree, by= c('state', 'year'))
-degree_df
+# Changing dates so they'll map to election years in president df
+for (yr in election_years[election_years <= 2000]) {
+  
+  decade_yr <- substring(yr, 1, 3) # get decade
+  
+  relevant_data <- bachelor_degree %>% 
+    filter(substring(year, 1, 3) == decade_yr) %>%
+    mutate(year = as.numeric(yr))
+  
+  bachelor_degree <- rbind(bachelor_degree, relevant_data)
+}
 
-####################################### HERE
+## Combined
+degree_df <- full_join(high_school_degree, bachelor_degree, by= c('state', 'year')) %>%
+  mutate(year = as.numeric(year))
+
+president <- president %>% left_join(degree_df, by = c("year", "state"))
 
 ## Census Data (https://www2.census.gov/programs-surveys/popest/datasets/) ####
 ### 1970: Race of Population by County
 ### Codebook: https://www2.census.gov/programs-surveys/popest/technical-documentation/file-layouts/1900-1980/co-asr-7079-layout.txt
-demo_1970s <- read_csv("C:/Users/ia767/Downloads/co-asr-7079.csv", 
-                        col_names = FALSE)
+demo_1970s <- read_csv("co-asr-7079.csv", col_names = FALSE)
 
 demo_1970s <- demo_1970s %>% 
   mutate(
-         under_19 = X4 + X5 + X6 + X7,
-         adults = X8 + X9 + X10 + X11 + X12 + X13 + X14 + X15,
-         over_60 = X16 + X17 + X18 + X19 + X20 + X21,
-         subtotal = under_19 + adults + over_60,
-         X3 = case_when(
-           X3 == 1 ~ 'White male',
-           X3 == 2 ~ 'White female',
-           X3 == 3 ~ 'Black male',
-           X3 == 4 ~ 'Black female',
-           X3 == 5 ~ 'Other races male',
-           X3 == 6 ~ 'Other races female'
-         ),
-         state_fips = as.numeric(str_sub(X2, 1, 2))
-        ) %>%
+    under_19 = X4 + X5 + X6 + X7,
+    adults = X8 + X9 + X10 + X11 + X12 + X13 + X14 + X15,
+    over_60 = X16 + X17 + X18 + X19 + X20 + X21,
+    subtotal = under_19 + adults + over_60,
+    X3 = case_when(
+      X3 == 1 ~ 'White male',
+      X3 == 2 ~ 'White female',
+      X3 == 3 ~ 'Black male',
+      X3 == 4 ~ 'Black female',
+      X3 == 5 ~ 'Other races male',
+      X3 == 6 ~ 'Other races female'
+    ),
+    state_fips = as.numeric(str_sub(X2, 1, 2))
+  ) %>%
   select(year = X1, state_fips, race_sex_code = X3, under_19, adults, over_60, subtotal)
 
 ### 1980 (1980, 1984, 1988)
@@ -130,9 +165,9 @@ full_demo_1980s <- data.frame()
 
 for (i in c(1980, 1984, 1988)){
   
-  file_path <- paste("C:/Users/ia767/Downloads/pe-02-", i, ".xls", sep = '')
+  file_path <- paste("pe-02-", i, ".xls", sep = '')
   demo_1980s <- read_excel(file_path,  skip = 5)
-
+  
   demo_1980s <- demo_1980s  %>% 
     mutate(
       under_19 = `Under 5 years` + `5 to 9 years` + `10 to 14 years` + `15 to 19 years`,
@@ -197,24 +232,24 @@ for (i in c(1:56)){
     
     full_demo_1990s <- rbind(full_demo_1990s, demo_1990s)    
   }, error=function(e){})
-
+  
 }
 
 ### 2000
 ### Intercensal Estimates of the Resident Population by Sex, Race, and Hispanic Origin for Counties
 ### Source: https://www.census.gov/data/datasets/time-series/demo/popest/intercensal-2000-2010-counties.html
-demo_00s <- read_csv("C:/Users/ia767/Downloads/co-est00int-sexracehisp.csv")
+demo_00s <- read_csv("co-est00int-sexracehisp.csv")
 demo_00s <- demo_00s %>%
   select(-SUMLEV, - COUNTY, -STNAME, -CTYNAME, -POPESTIMATE2010) %>%
   gather(year, est_pop, ESTIMATESBASE2000:CENSUS2010POP) %>%
   filter(ORIGIN == 0) %>% # ORIGIN diff. btw Hispanic and Non-Hispanic, this keeps total of both
   mutate(year = parse_number(year),
          state_fips = as.numeric(STATE),
-        )
+  )
 
 ### 2010
 ### Source: https://www.census.gov/data/tables/time-series/demo/popest/2010s-counties-detail.html
-demo_2010s <- read_csv("C:/Users/ia767/Downloads/cc-est2019-alldata.csv")
+demo_2010s <- read_csv("cc-est2019-alldata.csv")
 
 demo_2010s <- demo_2010s %>%
   select(STATE, YEAR, AGEGRP, TOT_FEMALE, BA_MALE, BA_FEMALE, WA_MALE, WA_FEMALE) %>%
@@ -328,7 +363,11 @@ president <- president %>%
 ## MISSING DATA
 president %>% filter(is.na(black_pop)) %>% distinct(year)
 
-## 
+## REMOVING DC
+president <- president %>%
+  filter(state != 'District of Columbia')
+
+## ADDING VARIABLES
 president <- president %>%
   mutate(past_participation = lag(totalvotes / population))
 
@@ -339,62 +378,36 @@ president <- president %>%
 ### lag(past_Vote), sd(population), share of jobs in X sector
 ### GDP
 
-reg <- lm(pres_percent_vote ~ year + state + 
-            incumbent_party +
-            past_participation + 
-            mean_senate_percent_vote +
-            mean_house_percent_vote + sd_house_percent_vote +
-            population + per_capita_personal_income +
-            per_white + per_black + per_fem + per_white_fem + per_black_fem,
-   data = president)
-summary(reg)
-
-library(leaps)
-models <- regsubsets(pres_percent_vote ~ year + state + 
-                       incumbent_party +
-                       past_participation + 
-                       mean_senate_percent_vote +
-                       mean_house_percent_vote + sd_house_percent_vote +
-                       population + per_capita_personal_income +
-                       per_white + per_black + per_fem + per_white_fem + per_black_fem,
-                     data = president,
-                     nvmax = 25,
-                     method = "seqrep")
-summary(models)
+lag_president <- president %>%
+  split(.$state) %>%
+  map(mutate, lag_pres_vote = lag(pres_percent_vote)) %>%
+  do.call(rbind, .)
 
 
-### TESTING ON 2016 ####
-partial_reg <- lm(pres_percent_vote ~ year + state + 
-                    incumbent_party +
+partial_reg <- lm(pres_percent_vote ~ year + state +
+                    lag_pres_vote +
                     past_participation + 
                     mean_senate_percent_vote +
-                    mean_house_percent_vote + sd_house_percent_vote +
-                    population + per_capita_personal_income +
-                    per_white + per_black + per_fem + per_white_fem + per_black_fem,
-          data = filter(president, year != 2012))
-summary(partial_reg)
-
-partial_reg <- lm(pres_percent_vote ~ year + state + 
-                    incumbent_party +
-                    mean_senate_percent_vote +
                     mean_house_percent_vote +
-                    population + per_capita_personal_income +
+                    per_capita_personal_income +
+                    incumbent_party*yoy_per_cap_income_change + 
                     per_black,
-                  data = filter(president, year != 2012))
+                  data = filter(lag_president, year != 2016))
 summary(partial_reg)
 
 
 ## Comparing Predictions (Vote Share)
 predicted_res <- predict(partial_reg, 
-        filter(president, year == 2012 & !(state %in% c('Alaska', 'Arizona', 'District of Columbia','Idaho',  'Hawaii'))))
+                         filter(lag_president, year == 2016 & !(state %in% c('District of Columbia'))))
 
-actual_res <- filter(president, year == 2012 & !(state %in% c('Alaska', 'Arizona', 'District of Columbia','Idaho',  'Hawaii')))$pres_percent_vote
+actual_res <- filter(lag_president, year == 2016)$pres_percent_vote
 
-president %>%
-  filter(year == 2016 & !(state %in% c('Alaska', 'Arizona', 'District of Columbia','Idaho',  'Hawaii'))) %>%
+lag_president %>% 
+  filter(year == 2016) %>%
+  select(state, pres_percent_vote) %>%
   mutate(preds = predicted_res) %>%
-  select(state, pres_percent_vote, preds) %>%
   View()
+
 
 ## Comparing Predictions (Outcome)
 predicted_res[predicted_res < 50] <- 0
@@ -404,30 +417,41 @@ actual_res[actual_res < 50] <- 0
 actual_res[actual_res >= 50] <- 1
 
 lm_error <- predicted_res - actual_res
-lm_error[lm_error %in% c(1, -1)]
+lm_error[lm_error %in% c(1, -1)] %>% length() ## 2016: 8 states wrong / 47 (17% error)
+length(lm_error[lm_error %in% c(1, -1)]) / length(predicted_res[!is.na(predicted_res)])
 
-#### GLM / LOGIT-PROBIT
-president <- president %>%
+#############
+lag_president <- lag_president %>%
   mutate(win_dummy = if_else(pres_percent_vote > 50, 1, 0))
 
-reg <- glm(win_dummy ~ year + state + 
-             incumbent_party +
+reg <- glm(win_dummy ~ year + state +
+             lag_pres_vote + 
              past_participation + 
              mean_senate_percent_vote +
-             mean_house_percent_vote + sd_house_percent_vote +
-             population + per_capita_personal_income +
-             per_white + per_black + per_fem + per_white_fem + per_black_fem,
-           data = president, family = "binomial")
+             mean_house_percent_vote +
+             per_capita_personal_income,
+           data = filter(lag_president, year != 2016), family = "binomial")
 summary(reg)
 
 glm_preds <- predict(reg, 
-                     filter(president, year == 2016 & !(state %in% c('Alaska', 'Arizona', 'District of Columbia','Idaho',  'Hawaii'))),
+                     filter(lag_president, year == 2016),
                      type="response") %>%
   round(2)
 
-glm_preds[glm_preds < 50] <- 0
-glm_preds[glm_preds >= 50] <- 1
+
+lag_president %>% 
+  filter(year == 2016 & 
+           !(state %in% c('District of Columbia'))) %>%
+  select(state, pres_percent_vote) %>%
+  mutate(preds = glm_preds) %>%
+  View()
+
+glm_preds
+glm_preds[glm_preds < 0.5] <- 0
+glm_preds[glm_preds >= 0.5] <- 1
 
 error <- glm_preds - actual_res
 error[error %in% c(1, -1)]
-## 6 out of 29 states wrong
+length(error[error %in% c(1, -1)]) / length(glm_preds[!is.na(glm_preds)])
+## 21.74% wrong
+
