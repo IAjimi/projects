@@ -10,6 +10,7 @@ setwd("C:/Users/ia767/Documents/pres_elections")
 library(readr)
 library(readxl)
 library(tidyverse)
+library(leaps)
 
 ### LOADING DATA
 senate <- read_csv("1976-2018-senate.csv")
@@ -124,7 +125,7 @@ high_school_degree <- high_school_degree %>%
   gather(year, per_hs_degree, -state)
 
 # Changing dates so they'll map to election years in president df
-for (yr in election_years[election_years <= 2000]) {
+for (yr in election_years[election_years <= 2010]) { ## NEED FRESHER DATA
   
   decade_yr <- substring(yr, 1, 3) # get decade
   
@@ -156,27 +157,81 @@ for (yr in election_years[election_years <= 2010]) { ## see if date needs changi
   bachelor_degree <- rbind(bachelor_degree, relevant_data)
 }
 
-## Combined
-degree_df <- full_join(high_school_degree, bachelor_degree, by= c('state', 'year')) %>%
-  mutate(year = as.numeric(year))
-
-president <- president %>% left_join(degree_df, by = c("year", "state"))
-
 ### Other Edu Attainment Series
 ## 2012
 ACSDT1Y2012 <- read_csv("C:/Users/ia767/Downloads/ACSDT1Y2012.B15003_2020-10-06T073920/ACSDT1Y2012.B15003_data_with_overlays_2020-10-06T073910.csv", 
                         skip = 1)
-ACSDT1Y2012 <- ACSDT1Y2012[ , c(1, 3, 35:52)] # remove all pre-HS completion data
+ACSDT1Y2012 <- ACSDT1Y2012[ , c(1:3, 35:52)] # remove all pre-HS completion data
 
 ACSDT1Y2012 <- ACSDT1Y2012 %>%
-  select_if(str_detect(names(.), 'Margin') == FALSE) %>%
-  mutate(state_fips = str_sub(id, start = -2),
+  select_if(str_detect(names(.), 'Margin') == FALSE) %>% # remove margins
+  mutate(state_fips = str_sub(id, start = -2), # get state fips
          state_fips = as.numeric(state_fips)) %>%
   select(-id)
 
-################# IN PROGRESS
-  
+# Get total HS or more
+ACSDT1Y2012$tot_hs <- rowSums(select(ACSDT1Y2012, "Estimate!!Total!!Regular high school diploma":"Estimate!!Total!!Doctorate degree"))
 
+# Complete DF
+ACSDT1Y2012 <- ACSDT1Y2012 %>%
+  mutate(per_hs_degree = 100 * tot_hs / `Estimate!!Total`,
+         per_bachelor_degree = NA,
+         year = 2012) %>% # actually 2019 but doing this for preds purposes
+  select(state = `Geographic Area Name`, year, per_hs_degree, per_bachelor_degree)
+
+## 2016
+ACSDT1Y2016 <- read_csv("C:/Users/ia767/Downloads/ACSDT1Y2016.B15003_2020-10-06T081731/ACSDT1Y2016.B15003_data_with_overlays_2020-10-06T081718.csv", 
+                        skip = 1)
+ACSDT1Y2016 <- ACSDT1Y2016[ , c(1:3, 35:52)] # remove all pre-HS completion data
+
+ACSDT1Y2016 <- ACSDT1Y2016 %>%
+  select_if(str_detect(names(.), 'Margin') == FALSE) %>% # remove margins
+  mutate(state_fips = str_sub(id, start = -2), # get state fips
+         state_fips = as.numeric(state_fips)) %>%
+  select(-id)
+
+# Get total HS or more
+ACSDT1Y2016$tot_hs <- rowSums(select(ACSDT1Y2016, "Estimate!!Total!!Regular high school diploma":"Estimate!!Total!!Doctorate degree"))
+
+# Complete DF
+ACSDT1Y2016 <- ACSDT1Y2016 %>%
+  mutate(per_hs_degree = 100 * tot_hs / `Estimate!!Total`,
+         per_bachelor_degree = NA,
+         year = 2016) %>% # actually 2019 but doing this for preds purposes
+  select(state = `Geographic Area Name`, year, per_hs_degree, per_bachelor_degree)
+
+## 2019
+ACSDT1Y2019 <- read_csv("C:/Users/ia767/Downloads/ACSDT1Y2019.B15003_2020-10-06T073806/ACSDT1Y2019.B15003_data_with_overlays_2020-10-06T073759.csv",
+                        skip = 1)
+ACSDT1Y2019 <- ACSDT1Y2019[ , c(1:3, 35:52)] # remove all pre-HS completion data
+
+ACSDT1Y2019 <- ACSDT1Y2019 %>%
+  select_if(str_detect(names(.), 'Margin') == FALSE) %>% # remove margins
+  mutate(state_fips = str_sub(id, start = -2), # get state fips
+         state_fips = as.numeric(state_fips)) %>%
+  select(-id)
+
+# Get total HS or more
+ACSDT1Y2019$tot_hs <- rowSums(select(ACSDT1Y2019, "Estimate!!Total:!!Regular high school diploma":"Estimate!!Total:!!Doctorate degree"))
+
+# Complete DF
+ACSDT1Y2019 <- ACSDT1Y2019 %>%
+  mutate(per_hs_degree = 100 * tot_hs / `Estimate!!Total:`,
+         per_bachelor_degree = NA,
+         year = 2020) %>% # actually 2019 but doing this for preds purposes
+  select(state = `Geographic Area Name`, year, per_hs_degree, per_bachelor_degree)
+
+### JOIN EDU TO PRESIDENT DF
+## Combined
+degree_df <- full_join(high_school_degree, bachelor_degree, by= c('state', 'year')) %>%
+  mutate(year = as.numeric(year))
+
+degree_df <- rbind(degree_df, ACSDT1Y2012)
+degree_df <- rbind(degree_df, ACSDT1Y2016)
+degree_df <- rbind(degree_df, ACSDT1Y2019)
+
+president <- president %>%
+  left_join(degree_df, by = c("state", "year"))
 
 
 ## Census Data (https://www2.census.gov/programs-surveys/popest/datasets/) ####
@@ -420,22 +475,19 @@ president <- president %>%
 ## IMPROVING PREDICTIONS
 ### VARIABLE SELECTION: PICKING RIGHT VARS FOR MODEL
 ### ADDING RELEVANT VARS TO MODEL
-### lag(past_Vote), sd(population), share of jobs in X sector
-### GDP
+### GDP, sd(population), share of jobs in X sector
 
-library(leaps)
 best_var_mod <- summary(regsubsets(pres_percent_vote ~ year +
                                      potus_run_reelect +
                                      mean_house_percent_vote + sd_house_percent_vote +
                                      per_capita_personal_income + population + 
                                      incumbent_party*yoy_per_cap_income_change + yoy_pop_change +
-                                     #per_hs_degree + per_bachelor_degree +
+                                     per_hs_degree + #per_bachelor_degree +
                                      per_white + per_black +
                                      per_fem + #per_white_fem + per_black_fem +
-                                     potus_run_reelect +
-                                     past_participation + lag_pres_vote , 
-                                   data = lag_president, nvmax = 20))
-best_r2 <- which.max(best_var_mod$adjr2))
+                                     lag_participation + lag_pres_vote , 
+                                   data = president, nvmax = 20))
+best_r2 <- which.max(best_var_mod$adjr2)
 best_var_mod$which[best_var_mod, ]
 
 #### "BACK TESTING" MODEL
@@ -461,14 +513,14 @@ for (yr in test_years){
                       per_capita_personal_income + population + 
                       yoy_per_cap_income_change +
                       #per_hs_degree +
-                      past_participation + 
+                      lag_participation + 
                       lag_pres_vote, 
-                    data = filter(lag_president, year < yr))
+                    data = filter(president, year < yr))
   
   # Get Predictions (Vote Share)
-  predicted_res <- predict(filter(partial_reg, lag_president, year == yr))
+  predicted_res <- predict(partial_reg, filter(president, year == yr))
   
-  actual_res <- filter(lag_president, year == yr)$pres_percent_vote
+  actual_res <- filter(president, year == yr)$pres_percent_vote
   
   # Compare Predictions (Outcome)
   predicted_res[predicted_res < 50] <- 0
@@ -492,28 +544,28 @@ sim_results
 avg_coef <- round(colMeans(do.call(rbind,list_coefs)), 4) # average coef
 names(avg_coef)[names(avg_coef) == "incumbent_partyR"] <- "incumbent_party" 
 
-for (nam in names(avg_coef)){
+for (nam in names(avg_coef)){ ### CHANGE TO MATRIX MULTIPLICATION
   if (nam == '(Intercept)'){
     preds_vector <- avg_coef[nam]
   } else{
-    new_preds_vector <- lag_president[lag_president$year == 2016, nam] * avg_coef[nam]
+    new_preds_vector <- president[president$year == 2016, nam] * avg_coef[nam]
     preds_vector <- preds_vector + new_preds_vector
   }
   
 }
 
 preds_vector <- flatten_dbl(preds_vector)
-names(preds_vector) <- lag_president$state[lag_president$year == 2016]
+names(preds_vector) <- president$state[president$year == 2016]
 round(preds_vector, 2)
 
-actual_vector <- lag_president$pres_percent_vote[lag_president$year == 2012]
-names(actual_vector) <- lag_president$state[lag_president$year == 2012]
+actual_vector <- president$pres_percent_vote[president$year == 2016]
+names(actual_vector) <- president$state[president$year == 2016]
 round(actual_vector, 2)
 
 round(preds_vector - actual_vector, 2)
 
 ## Comparing Predictions (Outcome)
-preds_vector[preds_vector < 50] <- 0
+preds_vector[preds_vector < 50] <- 0 # Florida Iowa Michigan North Carolina Ohio Pennsylvania Wisconsin -- CHECK WHY TWO MARYLAND
 preds_vector[preds_vector != 0] <- 1
 
 actual_vector[actual_vector < 50] <- 0
