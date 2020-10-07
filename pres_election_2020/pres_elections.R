@@ -19,11 +19,17 @@ president <- read_csv("1976-2016-president.csv")
 election_years <- distinct(president, year)$year
 
 ## ELECTORAL DATA ####
+## Source: https://electionlab.mit.edu/data
+## FIX TYPO IN PRESIDENT FILE
+president$totalvotes[president$year == 2000 & president$state_fips == 31] <- 697019
+
+## CLEANING & TRANSFORMING
 senate <- senate %>% 
   filter(party == 'democrat') %>%
   mutate(senate_percent_vote = 100 * candidatevotes / totalvotes,
          year = year + 2) %>%
-  select(year, state, state_po, state_fips, senate_candidatevotes = candidatevotes, senate_percent_vote) %>%  group_by(year, state, state_po, state_fips) %>%
+  select(year, state, state_po, state_fips, senate_candidatevotes = candidatevotes, senate_percent_vote) %>%
+  group_by(year, state, state_po, state_fips) %>%
   summarize(mean_senate_percent_vote = mean(senate_percent_vote, na.rm = T)) 
 
 house <- house %>% 
@@ -40,6 +46,9 @@ pres_participation <- president %>% distinct(year, state_fips, totalvotes)
 
 president <- president %>% 
   filter(party == 'democrat') %>%
+  group_by(year, state, state_po, state_fips, totalvotes) %>%
+  summarise(candidatevotes = sum(candidatevotes)) %>% # has to be done like this bc of writein = False or True for AZ and MD
+  ungroup() %>%
   mutate(pres_percent_vote = 100 * candidatevotes / totalvotes) %>%
   select(year, state, state_po, state_fips, pres_percent_vote)
 
@@ -90,6 +99,7 @@ president <- president %>%
   ungroup()
 
 ## ECONOMIC DATA ####
+## Source: https://www.bea.gov/ (SQINC1)
 bea_personal_income_state <- read_excel("bea_personal_income_state.xls", 
                                         skip = 5)
 
@@ -125,7 +135,9 @@ high_school_degree <- high_school_degree %>%
   gather(year, per_hs_degree, -state)
 
 # Changing dates so they'll map to election years in president df
-for (yr in election_years[election_years <= 2010]) { ## NEED FRESHER DATA
+new_high_school_degree <- data.frame()
+
+for (yr in election_years[election_years <= 2010 & !election_years %in% c(1980, 2000)]) { ## NEED FRESHER DATA
   
   decade_yr <- substring(yr, 1, 3) # get decade
   
@@ -133,9 +145,10 @@ for (yr in election_years[election_years <= 2010]) { ## NEED FRESHER DATA
     filter(substring(year, 1, 3) == decade_yr) %>%
     mutate(year = as.numeric(yr))
   
-  high_school_degree <- rbind(high_school_degree, relevant_data)
+  new_high_school_degree <- rbind(new_high_school_degree, relevant_data)
 }
 
+high_school_degree <- rbind(high_school_degree, new_high_school_degree)
 
 ## BA (1970:2000)
 bachelor_degree <- read_csv("table06a.csv", skip = 8)
@@ -146,7 +159,9 @@ bachelor_degree <- bachelor_degree %>%
   gather(year, per_bachelor_degree, -state)
 
 # Changing dates so they'll map to election years in president df
-for (yr in election_years[election_years <= 2010]) { ## see if date needs changing
+new_bachelor_degree <- data.frame()
+
+for (yr in election_years[election_years <= 2010 & !election_years %in% c(1980, 2000)]) { ## see if date needs changing
   
   decade_yr <- substring(yr, 1, 3) # get decade
   
@@ -154,8 +169,10 @@ for (yr in election_years[election_years <= 2010]) { ## see if date needs changi
     filter(substring(year, 1, 3) == decade_yr) %>%
     mutate(year = as.numeric(yr))
   
-  bachelor_degree <- rbind(bachelor_degree, relevant_data)
+  new_bachelor_degree <- rbind(new_bachelor_degree, relevant_data)
 }
+
+bachelor_degree <- rbind(bachelor_degree, new_bachelor_degree)
 
 ### Other Edu Attainment Series
 ## 2012
@@ -574,3 +591,11 @@ actual_vector[actual_vector != 0] <- 1
 preds_vector - actual_vector
 
 #length(lm_error[lm_error %in% c(1, -1)]) / length(predicted_res[!is.na(predicted_res)])
+
+### CHECKING 2020 DATA
+president %>% group_by(state, year) %>% count() %>% filter(n > 1)
+
+
+president %>%
+  filter(year == 2020) %>% 
+  select(state, potus_run_reelect, mean_house_percent_vote, per_capita_personal_income, population, yoy_per_cap_income_change, lag_participation, lag_pres_vote) %>% View()
