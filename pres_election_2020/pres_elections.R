@@ -1,4 +1,3 @@
-## COMPLETING EDUCATIONAL ATTAINMENT
 ## ADDING URBAN % POP
 ## ADDING STATE GDP
 
@@ -11,6 +10,7 @@ library(readr)
 library(readxl)
 library(tidyverse)
 library(leaps)
+library(broom)
 
 ### LOADING DATA
 senate <- read_csv("1976-2018-senate.csv")
@@ -505,7 +505,7 @@ best_var_mod <- summary(regsubsets(pres_percent_vote ~ year +
                                      lag_participation + lag_pres_vote , 
                                    data = president, nvmax = 20))
 best_r2 <- which.max(best_var_mod$adjr2)
-best_var_mod$which[best_var_mod, ]
+best_var_mod$which[best_r2, ]
 
 #### "BACK TESTING" MODEL
 # test best variables iteratively
@@ -525,13 +525,13 @@ list_coefs <- rep(list(NA), length(test_years))
 for (yr in test_years){
   # Fit model
   partial_reg <- lm(pres_percent_vote ~ 
-                      potus_run_reelect +
+                      year + 
+                      incumbent_party + 
                       mean_house_percent_vote +
-                      per_capita_personal_income + population + 
-                      yoy_per_cap_income_change +
-                      #per_hs_degree +
-                      lag_participation + 
-                      lag_pres_vote, 
+                      per_capita_personal_income + 
+                      yoy_per_cap_income_change + 
+                      per_hs_degree + 
+                      lag_participation + lag_pres_vote, 
                     data = filter(president, year < yr))
   
   # Get Predictions (Vote Share)
@@ -592,9 +592,104 @@ preds_vector - actual_vector
 
 #length(lm_error[lm_error %in% c(1, -1)]) / length(predicted_res[!is.na(predicted_res)])
 
-### CHECKING 2020 DATA
-president %>% group_by(state, year) %>% count() %>% filter(n > 1)
+### ONE MODEL PER STATE WITH BROOM ####
+library(broom)
 
+test <- president %>% 
+  filter(!year %in% c(1976,2020)) %>%
+  select(state, 
+         year, 
+         pres_percent_vote, 
+         potus_run_reelect, 
+         mean_house_percent_vote, 
+         per_capita_personal_income, 
+         population, 
+         yoy_per_cap_income_change, 
+         lag_participation, 
+         lag_pres_vote) %>%
+  group_by(state) %>% 
+  nest() %>%
+  mutate(model = map(data, ~ lm(pres_percent_vote ~ ., data = .)),
+         results = map(model, augment),
+         summary_stats = map(model, glance))
+
+r2_adj <- test$summary_stats %>% map('adj.r.squared') %>% flatten_dbl()
+names(r2_adj) <- test$state
+
+r2_adj[r2_adj < 0.8] %>% length()
+
+preds <- test$results %>% map('.fitted')
+actual <- test$data %>% map('pres_percent_vote')
+length(flatten_dbl(preds))
+length(flatten_dbl(actual))
+
+##### AUTOMATE SUBSET SELECTION
+## CREATING FMLA GENERATOR
+find_fmla <- function(data, y, nvmax = 20){
+  
+  # Start with all preds
+  initial_fmla <- as.formula(paste(y, " ~ .")) 
+  best_var_mod <- summary(regsubsets(initial_fmla, 
+                                     data = data, 
+                                     nvmax = nvmax))
+  
+  # Get best preds
+  best_r2 <- which.max(best_var_mod$adjr2)
+  best_var_names <- best_var_mod$which[best_r2, ]
+  best_var_names <- names(best_var_names[best_var_names == TRUE])
+  best_var_names <- best_var_names[best_var_names != "(Intercept)" ]
+  
+  # Create relevant fmla
+  fmla <- as.formula(paste(y, " ~ ", paste(best_var_names, collapse = "+")))   
+  return(fmla)
+}
+
+## SAME AS ABOVE WITH CUSTOM FUNC
+test <- president %>% 
+  filter(!year %in% c(1976,2020)) %>%
+  select(state, 
+         #year, 
+         pres_percent_vote, 
+         potus_run_reelect, 
+         mean_house_percent_vote, 
+         per_capita_personal_income, 
+         population, 
+         yoy_per_cap_income_change, 
+         lag_participation, 
+         lag_pres_vote) %>%
+  group_by(state) %>% 
+  nest() %>%
+  mutate(best_fmla = map(data, find_fmla, "pres_percent_vote"),
+         best_fmla = str_replace(best_fmla, '<.{1,}>', ''), # function returns environment with fmla for whatever reason so removing that
+         model = map(data, ~ lm(best_fmla, data = .)),
+         results = map(model, augment),
+         summary_stats = map(model, glance))
+
+# 2020 preds
+preds2020 <- data.frame(state = test$state, 
+                        preds = rep(NA, length(test$state)))
+
+
+for (state_nam in test$state){
+  new_pred <- predict(test$model[test$state == state_nam][[1]],
+                      filter(president, state == state_nam & year == 2020))
+  preds2020$preds[preds2020$state == state_nam] <- new_pred
+  
+}
+
+preds2020 %>%
+  mutate(dem_win = if_else(preds < 50, 0, 1),
+         past_thing = president$pres_percent_vote[president$year == 2016]) %>%
+  #filter(dem_win == 1) %>%
+  View()
+
+
+# bold iowa prediction, nevada, ohio, south carolina ????? 
+# should CLEARLY be democrat: new jersey??? vermont????????/
+
+
+### CHECKING 2020 DATA ######
+president %>% group_by(state, year) %>% count() %>% filter(n > 1)
 
 president %>%
   filter(year == 2020) %>% 
