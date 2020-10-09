@@ -143,16 +143,16 @@ for (i in c(1:length(c(1976:2019)))){
   }
 }
 
-gdp_col_names <- c(gdp_col_names, c('2020_Q1', '2020_Q2'))
+gdp_col_names <- c(gdp_col_names, c('2020_Q1', '2020_Q3')) #it's actually 2020_Q2, renamed so that it will work w/ code below
 
 # Subset Data
 names(bea_gdp_nationwide) <- gdp_col_names
 
 bea_gdp_nationwide <- bea_gdp_nationwide %>%
-  select_if(str_detect(names(.), 'Q4|Description') == TRUE) %>%
-  mutate_if(str_detect(names(.), 'Q4') == TRUE, as.numeric) %>%
+  select_if(str_detect(names(.), 'Q3|Description') == TRUE) %>% # only keeping Q3: around election time
+  mutate_if(str_detect(names(.), 'Q3') == TRUE, as.numeric) %>%
   gather(year, metric, -Description) %>%
-  mutate(year = str_replace(year, '_Q4', ''),
+  mutate(year = str_replace(year, '_Q3', ''),
          Description = case_when(
            Description == 'Gross domestic product' ~ 'gdp',
            Description == 'Personal consumption expenditures' ~ 'personal_consumption_exp',
@@ -523,7 +523,6 @@ president <- president %>%
 president %>% filter(is.na(black_pop)) %>% distinct(year)
 
 ## FINAL TOUCH: REMOVING DC & ADDING LAGGED VARIABLES
-
 president <- president %>%
   filter(state != 'District of Columbia') %>%
   split(.$state) %>%
@@ -531,6 +530,9 @@ president <- president %>%
       lag_pres_vote = lag(pres_percent_vote),
       lag_participation = lag(totalvotes / population)) %>%
   do.call(rbind, .)
+
+## CHECKING CORRELATION
+president %>% select_if(is.numeric) %>% filter(year > 1976 & year < 2020) %>% cor() %>% round(2)
 
 ## STATISTICAL ANALYSIS ####
 ## IMPROVING PREDICTIONS
@@ -644,9 +646,15 @@ test <- president %>%
          pres_percent_vote, 
          potus_run_reelect, 
          mean_house_percent_vote, 
-         per_capita_personal_income, 
+         #per_capita_personal_income, 
          population, 
-         yoy_per_cap_income_change, 
+         #yoy_per_cap_income_change, 
+         gdp,
+         gdp_YOY,
+         personal_consumption_exp,
+         personal_consumption_exp_YOY,
+         exports,
+         exports_YOY,
          lag_participation, 
          lag_pres_vote) %>%
   group_by(state) %>% 
