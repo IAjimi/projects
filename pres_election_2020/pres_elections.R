@@ -1,6 +1,8 @@
 ## ADDING URBAN % POP
 ## ADDING STATE GDP
 
+### AVOID OVERFITTING WITH TIME SERIES VERSION OF TRAIN
+
 ## SETUP ####
 getwd()
 setwd("C:/Users/ia767/Documents/pres_elections")
@@ -77,8 +79,8 @@ president <- president %>%
       year == 1984 ~ 1,
       year == 1988 ~ 0,
       year == 1992 ~ 1,
-      year >= 1996 ~ 1,
-      year <= 2000 ~ 0,
+      year == 1996 ~ 1,
+      year == 2000 ~ 0,
       year == 2004 ~ 1,
       year == 2008 ~ 0,
       year == 2012 ~ 1,
@@ -99,6 +101,7 @@ president <- president %>%
   ungroup()
 
 ## ECONOMIC DATA ####
+## Personal Income by State
 ## Source: https://www.bea.gov/ (SQINC1)
 bea_personal_income_state <- read_excel("bea_personal_income_state.xls", 
                                         skip = 5)
@@ -124,7 +127,48 @@ president <- president %>%
   map(mutate, yoy_pop_change = population / lag(population)) %>%
   do.call(rbind.data.frame, .)
 
-## Educational Attainment ####
+## GDP Nationwide, Real GDP, Chained Dollars (2012), Seasonally Adjusted (source BEA)
+bea_gdp_nationwide <- read_excel("bea_gdp_nationwide.xls", skip = 5)
+bea_gdp_nationwide <- bea_gdp_nationwide[c(2:nrow(bea_gdp_nationwide)), ]
+
+# Fix Column Names
+gdp_col_names <- c("Line", 'Description')
+
+for (i in c(1:length(c(1976:2019)))){
+  yr <- c(1976:2019)[i]
+  
+  for (Q in c('Q1', 'Q2', 'Q3', 'Q4')){
+      new_name <- paste(yr, Q, sep = '_')
+      gdp_col_names <- c(gdp_col_names, new_name)
+  }
+}
+
+gdp_col_names <- c(gdp_col_names, c('2020_Q1', '2020_Q2'))
+
+# Subset Data
+names(bea_gdp_nationwide) <- gdp_col_names
+
+bea_gdp_nationwide <- bea_gdp_nationwide %>%
+  select_if(str_detect(names(.), 'Q4|Description') == TRUE) %>%
+  mutate_if(str_detect(names(.), 'Q4') == TRUE, as.numeric) %>%
+  gather(year, metric, -Description) %>%
+  mutate(year = str_replace(year, '_Q4', ''),
+         Description = case_when(
+           Description == 'Gross domestic product' ~ 'gdp',
+           Description == 'Personal consumption expenditures' ~ 'personal_consumption_exp',
+           Description == 'Exports' ~ 'exports',
+           T ~ Description
+         )) %>%
+  filter(Description %in% c('gdp', 'personal_consumption_exp', 'exports')) %>% # note: bc of the way the xls file is formatted, other fields may need renaming
+  spread(Description, metric) %>% 
+  mutate_if(is.numeric, funs(YOY = . / lag(.))) %>%
+  mutate(year = as.numeric(year))
+
+president <- president %>%
+  left_join(bea_gdp_nationwide, by = c("year"))
+
+## SOCIO-ECONOMIC & DEMOGRAPHIC DATA ####
+## Educational Attainment 
 # https://www.census.gov/library/publications/2010/demo/educational-attainment-1940-2000.html (i think)
 ## HS (1970:2000)
 high_school_degree <- read_csv("table05a.csv", skip = 9)
@@ -593,8 +637,6 @@ preds_vector - actual_vector
 #length(lm_error[lm_error %in% c(1, -1)]) / length(predicted_res[!is.na(predicted_res)])
 
 ### ONE MODEL PER STATE WITH BROOM ####
-library(broom)
-
 test <- president %>% 
   filter(!year %in% c(1976,2020)) %>%
   select(state, 
@@ -655,6 +697,12 @@ test <- president %>%
          per_capita_personal_income, 
          population, 
          yoy_per_cap_income_change, 
+         gdp,
+         gdp_YOY,
+         personal_consumption_exp,
+         personal_consumption_exp_YOY,
+         exports,
+         exports_YOY,
          lag_participation, 
          lag_pres_vote) %>%
   group_by(state) %>% 
@@ -665,6 +713,12 @@ test <- president %>%
          results = map(model, augment),
          summary_stats = map(model, glance))
 
+summary_stats <- do.call(rbind, test$summary_stats)
+summary_stats$state <- test$state
+
+summary_stats %>%
+  filter(state %in% c('Florida', 'Iowa', 'Michigan', 'North Carolina', 'Ohio', 'Pennsylvania', 'Wisconsin'))
+
 # 2020 preds
 preds2020 <- data.frame(state = test$state, 
                         preds = rep(NA, length(test$state)))
@@ -672,14 +726,28 @@ preds2020 <- data.frame(state = test$state,
 
 for (state_nam in test$state){
   new_pred <- predict(test$model[test$state == state_nam][[1]],
-                      filter(president, state == state_nam & year == 2020))
+                      filter(president, state == state_nam & year == 2016))
   preds2020$preds[preds2020$state == state_nam] <- new_pred
+
+  new_2020_pred <- predict(test$model[test$state == state_nam][[1]],
+                      filter(president, state == state_nam & year == 2020))
+  preds2020$preds2020[preds2020$state == state_nam] <- new_2020_pred
   
 }
 
+sd_pred <- test$results %>% map(".resid") %>% map(function(x) x**2) %>% map_dbl(sd)
+
 preds2020 %>%
-  mutate(dem_win = if_else(preds < 50, 0, 1),
-         past_thing = president$pres_percent_vote[president$year == 2016]) %>%
+  mutate(
+         lower_bound = preds - 1.96 * sd_pred,
+         upper_bound = preds + 1.96 * sd_pred,
+         mse = test$results %>% map(".resid") %>% map(function(x) x**2) %>% map_dbl(sum),
+         predicted_win = if_else(preds < 50, 0, 1),
+         swing = if_else( (lower_bound < 50 & preds >= 50) | 
+                           (upper_bound >= 50 & preds < 50), 1, 0),
+         results_2016 = president$pres_percent_vote[president$year == 2016],
+         electoral_votes = electoral_votes) %>%
+  mutate_if(is.numeric, round, 2) %>% 
   #filter(dem_win == 1) %>%
   View()
 
