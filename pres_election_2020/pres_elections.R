@@ -1,5 +1,4 @@
 ## ADDING URBAN % POP
-## ADDING STATE GDP
 
 ### AVOID OVERFITTING WITH TIME SERIES VERSION OF TRAIN
 
@@ -105,7 +104,7 @@ president <- president %>%
 ## Source: https://www.bea.gov/ (SQINC1)
 bea_personal_income_state <- read_excel("bea_personal_income_state.xls", 
                                         skip = 5)
-
+# Cleaning Df
 bea_personal_income_state <- bea_personal_income_state %>% 
   gather(year, val, `1976`:`2019`) %>%
   mutate(Description = if_else(Description == 'Population (persons) 1/', 'population', 'per_capita_personal_income'),
@@ -117,14 +116,21 @@ bea_personal_income_state <- bea_personal_income_state %>%
   select(state = GeoName, year, per_capita_personal_income, population) %>%
   filter(!is.na(per_capita_personal_income))
 
+## Add to Pres
 president <- president %>%
   left_join(bea_personal_income_state, by = c("year", "state"))
 
-## Add YoY Change
+# Add YoY Change + Z score var
 president <- president %>%
   split(.$state) %>%
-  map(mutate, yoy_per_cap_income_change = per_capita_personal_income / lag(per_capita_personal_income)) %>%
-  map(mutate, yoy_pop_change = population / lag(population)) %>%
+  map(mutate, 
+      yoy_per_cap_income_change = per_capita_personal_income / lag(per_capita_personal_income), 
+      yoy_pop_change = population / lag(population),
+      mean_pcpi = c(NA, zoo::rollmean(per_capita_personal_income, 2)), #rollmean doesn't include NA when can't compute mean
+      mean_pcpi = lag(mean_pcpi), # lag to get avg of prev 2 years
+      zscore_pcpi = (per_capita_personal_income - mean_pcpi) / sd(per_capita_personal_income)
+      ) %>%
+  map(select, -mean_pcpi) %>%
   do.call(rbind.data.frame, .)
 
 ## GDP Nationwide, Real GDP, Chained Dollars (2012), Seasonally Adjusted (source BEA)
@@ -145,7 +151,7 @@ for (i in c(1:length(c(1976:2019)))){
 
 gdp_col_names <- c(gdp_col_names, c('2020_Q1', '2020_Q3')) #it's actually 2020_Q2, renamed so that it will work w/ code below
 
-# Subset Data
+# Clean Data
 names(bea_gdp_nationwide) <- gdp_col_names
 
 bea_gdp_nationwide <- bea_gdp_nationwide %>%
@@ -161,7 +167,12 @@ bea_gdp_nationwide <- bea_gdp_nationwide %>%
          )) %>%
   filter(Description %in% c('gdp', 'personal_consumption_exp', 'exports')) %>% # note: bc of the way the xls file is formatted, other fields may need renaming
   spread(Description, metric) %>% 
-  mutate_if(is.numeric, funs(YOY = . / lag(.))) %>%
+  mutate_if(is.numeric, 
+            funs(
+              YOY = . / lag(.),
+              zscore = (. - lag(c(NA, zoo::rollmean(., 2))) ) / sd(.)
+              )
+            ) %>%
   mutate(year = as.numeric(year))
 
 president <- president %>%
@@ -534,24 +545,26 @@ president <- president %>%
 ## CHECKING CORRELATION
 president %>% select_if(is.numeric) %>% filter(year > 1976 & year < 2020) %>% cor() %>% round(2)
 
-## STATISTICAL ANALYSIS ####
-## IMPROVING PREDICTIONS
-### VARIABLE SELECTION: PICKING RIGHT VARS FOR MODEL
-### ADDING RELEVANT VARS TO MODEL
-### GDP, sd(population), share of jobs in X sector
 
-best_var_mod <- summary(regsubsets(pres_percent_vote ~ year +
-                                     potus_run_reelect +
+## STATISTICAL ANALYSIS ####
+best_var_mod <- summary(regsubsets(pres_percent_vote ~ 
+                                     year +
                                      mean_house_percent_vote + sd_house_percent_vote +
                                      per_capita_personal_income + population + 
-                                     incumbent_party*yoy_per_cap_income_change + yoy_pop_change +
+                                     incumbent_party:yoy_per_cap_income_change + 
+                                     yoy_pop_change +
+                                     #exports + gdp + personal_consumption_exp + 
+                                     #exports_YOY + gdp_YOY + personal_consumption_exp_YOY + 
                                      per_hs_degree + #per_bachelor_degree +
-                                     per_white + per_black +
-                                     per_fem + #per_white_fem + per_black_fem +
+                                     #per_white + per_black +
+                                     #per_fem + per_white_fem + per_black_fem +
                                      lag_participation + lag_pres_vote , 
                                    data = president, nvmax = 20))
 best_r2 <- which.max(best_var_mod$adjr2)
-best_var_mod$which[best_r2, ]
+best_vars <- best_var_mod$which[best_r2, ]
+best_vars <- names(best_vars[best_vars == TRUE])
+best_vars <- best_vars[best_vars != "(Intercept)"]
+fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(best_vars, collapse = "+")))
 
 #### "BACK TESTING" MODEL
 # test best variables iteratively
@@ -570,15 +583,7 @@ list_coefs <- rep(list(NA), length(test_years))
 # Start sim at 1996
 for (yr in test_years){
   # Fit model
-  partial_reg <- lm(pres_percent_vote ~ 
-                      year + 
-                      incumbent_party + 
-                      mean_house_percent_vote +
-                      per_capita_personal_income + 
-                      yoy_per_cap_income_change + 
-                      per_hs_degree + 
-                      lag_participation + lag_pres_vote, 
-                    data = filter(president, year < yr))
+  partial_reg <- lm(fmla, data = filter(president, year < yr))
   
   # Get Predictions (Vote Share)
   predicted_res <- predict(partial_reg, filter(president, year == yr))
@@ -610,7 +615,12 @@ names(avg_coef)[names(avg_coef) == "incumbent_partyR"] <- "incumbent_party"
 for (nam in names(avg_coef)){ ### CHANGE TO MATRIX MULTIPLICATION
   if (nam == '(Intercept)'){
     preds_vector <- avg_coef[nam]
-  } else{
+  } else if (str_detect(nam, ':') == TRUE){
+    nam_vector <- str_split(nam, ':') %>% flatten_chr()
+    new_preds_vector <- president[president$year == 2016, nam_vector[1]] * president[president$year == 2016, nam_vector[2]] * avg_coef[nam]
+    preds_vector <- preds_vector + new_preds_vector   
+  }
+  else{
     new_preds_vector <- president[president$year == 2016, nam] * avg_coef[nam]
     preds_vector <- preds_vector + new_preds_vector
   }
@@ -634,9 +644,7 @@ preds_vector[preds_vector != 0] <- 1
 actual_vector[actual_vector < 50] <- 0
 actual_vector[actual_vector != 0] <- 1
 
-preds_vector - actual_vector
-
-#length(lm_error[lm_error %in% c(1, -1)]) / length(predicted_res[!is.na(predicted_res)])
+actual_vector - preds_vector
 
 ### ONE MODEL PER STATE WITH BROOM ####
 test <- president %>% 
