@@ -529,6 +529,62 @@ president <- president %>%
          per_white_fem = white_fem_pop / population,
          per_black_fem = black_fem_pop / population)
 
+#### POLLING DATA ####
+### HISTORICAL (1968-2016)
+## Source: https://github.com/fivethirtyeight/data/tree/master/polls
+raw_poll <- read_csv('https://github.com/fivethirtyeight/data/raw/master/polls/pres_pollaverages_1968-2016.csv')
+
+dem_pres_candidates <- c('George S. McGovern', 'Jimmy Carter',
+                         'Walter F. Mondale', 'Michael S. Dukakis', 'Bill Clinton',
+                         'Al Gore', 'John Kerry', 'Barack Obama',
+                         'Hillary Rodham Clinton')
+
+poll <- raw_poll %>% 
+  filter(state != 'National') %>% 
+  select(year = cycle, state, candidate_name, pct_estimate, pct_trend_adjusted, modeldate, election_date) %>%
+  mutate(
+         state = case_when(
+           state %in% c('ME-1', 'ME-2') ~ 'Maine', # don't have time to adjust for change
+           state %in% c('NE-1', 'NE-2', 'NE-3') ~ 'Nebraska',
+           T ~ state
+         ),
+         modeldate = as.Date(modeldate, '%m/%d/%Y'),
+         election_date = as.Date(election_date, '%m/%d/%Y'),
+         days_to_election = election_date - modeldate) %>%
+  filter(days_to_election < 15 & candidate_name %in% dem_pres_candidates) %>%
+  group_by(year, state) %>%
+  summarise(poll_trend = mean(pct_trend_adjusted))
+
+president <- president %>% left_join(poll, by = c("year", "state"))
+
+### RECENT (2020)
+## Source: https://github.com/fivethirtyeight/data/tree/master/election-forecasts-2020
+poll_avgs_2020 <- read_csv("presidential_poll_averages_2020.csv")
+
+poll_avgs_2020 <- poll_avgs_2020 %>%
+  filter(state != 'National' & candidate_name == 'Joseph R. Biden Jr.') %>% 
+  select(year = cycle, state, candidate_name, pct_trend_adjusted, modeldate) %>%
+  mutate(
+    state = case_when(
+      state %in% c('ME-1', 'ME-2') ~ 'Maine', # don't have time to adjust for change
+      state %in% c('NE-1', 'NE-2', 'NE-3') ~ 'Nebraska',
+      T ~ state
+    ),
+    modeldate = as.Date(modeldate, '%m/%d/%Y'),
+    election_date = as.Date('11/3/2020', '%m/%d/%Y'),
+    days_to_election = election_date - modeldate) %>%
+  filter(days_to_election < 15) %>%
+  group_by(year, state) %>%
+  summarise(poll_trend = mean(pct_trend_adjusted))
+
+president2020 <- president %>%
+  filter(year == 2020) %>% 
+  select(- poll_trend) %>%
+  left_join(poll_avgs_2020, by = c("year", "state"))
+
+president <- rbind(filter(president, year < 2020), president2020)
+
+
 ### ADDING VARIABLES, SCOPING MISSING DATA ####
 ## MISSING DATA
 president %>% filter(is.na(black_pop)) %>% distinct(year)
@@ -546,105 +602,10 @@ president <- president %>%
 president %>% select_if(is.numeric) %>% filter(year > 1976 & year < 2020) %>% cor() %>% round(2)
 
 
+#########################################
+
 ## STATISTICAL ANALYSIS ####
-best_var_mod <- summary(regsubsets(pres_percent_vote ~ 
-                                     year +
-                                     mean_house_percent_vote + sd_house_percent_vote +
-                                     per_capita_personal_income + population + 
-                                     incumbent_party:yoy_per_cap_income_change + 
-                                     yoy_pop_change +
-                                     #exports + gdp + personal_consumption_exp + 
-                                     #exports_YOY + gdp_YOY + personal_consumption_exp_YOY + 
-                                     per_hs_degree + #per_bachelor_degree +
-                                     #per_white + per_black +
-                                     #per_fem + per_white_fem + per_black_fem +
-                                     lag_participation + lag_pres_vote , 
-                                   data = president, nvmax = 20))
-best_r2 <- which.max(best_var_mod$adjr2)
-best_vars <- best_var_mod$which[best_r2, ]
-best_vars <- names(best_vars[best_vars == TRUE])
-best_vars <- best_vars[best_vars != "(Intercept)"]
-fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(best_vars, collapse = "+")))
 
-#### "BACK TESTING" MODEL
-# test best variables iteratively
-# pool coefs for better pred?
-
-## Test model on different years, iteratively
-test_years <- election_years[election_years >= 2000]
-
-sim_results <- data.frame(
-  'year' = test_years,
-  'error' = rep(NA, length(test_years))
-)
-
-list_coefs <- rep(list(NA), length(test_years))
-
-# Start sim at 1996
-for (yr in test_years){
-  # Fit model
-  partial_reg <- lm(fmla, data = filter(president, year < yr))
-  
-  # Get Predictions (Vote Share)
-  predicted_res <- predict(partial_reg, filter(president, year == yr))
-  
-  actual_res <- filter(president, year == yr)$pres_percent_vote
-  
-  # Compare Predictions (Outcome)
-  predicted_res[predicted_res < 50] <- 0
-  predicted_res[predicted_res >= 50] <- 1
-  
-  actual_res[actual_res < 50] <- 0
-  actual_res[actual_res >= 50] <- 1
-  
-  lm_error <- predicted_res - actual_res
-  lm_error <- length(lm_error[lm_error %in% c(1, -1)]) / length(predicted_res[!is.na(predicted_res)])
-  
-  sim_results$error[sim_results$year == yr] <- lm_error
-  
-  i <- which(test_years == yr)
-  list_coefs[[i]] <- summary(partial_reg)$coefficients[ , 'Estimate']
-}
-
-sim_results
-
-## TESTING AVG COEF (Taking average of the coefs above)
-avg_coef <- round(colMeans(do.call(rbind,list_coefs)), 4) # average coef
-names(avg_coef)[names(avg_coef) == "incumbent_partyR"] <- "incumbent_party" 
-
-for (nam in names(avg_coef)){ ### CHANGE TO MATRIX MULTIPLICATION
-  if (nam == '(Intercept)'){
-    preds_vector <- avg_coef[nam]
-  } else if (str_detect(nam, ':') == TRUE){
-    nam_vector <- str_split(nam, ':') %>% flatten_chr()
-    new_preds_vector <- president[president$year == 2016, nam_vector[1]] * president[president$year == 2016, nam_vector[2]] * avg_coef[nam]
-    preds_vector <- preds_vector + new_preds_vector   
-  }
-  else{
-    new_preds_vector <- president[president$year == 2016, nam] * avg_coef[nam]
-    preds_vector <- preds_vector + new_preds_vector
-  }
-  
-}
-
-preds_vector <- flatten_dbl(preds_vector)
-names(preds_vector) <- president$state[president$year == 2016]
-round(preds_vector, 2)
-
-actual_vector <- president$pres_percent_vote[president$year == 2016]
-names(actual_vector) <- president$state[president$year == 2016]
-round(actual_vector, 2)
-
-round(preds_vector - actual_vector, 2)
-
-## Comparing Predictions (Outcome)
-preds_vector[preds_vector < 50] <- 0 # Florida Iowa Michigan North Carolina Ohio Pennsylvania Wisconsin -- CHECK WHY TWO MARYLAND
-preds_vector[preds_vector != 0] <- 1
-
-actual_vector[actual_vector < 50] <- 0
-actual_vector[actual_vector != 0] <- 1
-
-actual_vector - preds_vector
 
 ### ONE MODEL PER STATE WITH BROOM ####
 test <- president %>% 
@@ -762,14 +723,9 @@ preds2020 %>%
          swing = if_else( (lower_bound < 50 & preds >= 50) | 
                            (upper_bound >= 50 & preds < 50), 1, 0),
          results_2016 = president$pres_percent_vote[president$year == 2016],
-         electoral_votes = electoral_votes) %>%
+         ) %>%
   mutate_if(is.numeric, round, 2) %>% 
-  #filter(dem_win == 1) %>%
   View()
-
-
-# bold iowa prediction, nevada, ohio, south carolina ????? 
-# should CLEARLY be democrat: new jersey??? vermont????????/
 
 
 ### CHECKING 2020 DATA ######
@@ -778,3 +734,51 @@ president %>% group_by(state, year) %>% count() %>% filter(n > 1)
 president %>%
   filter(year == 2020) %>% 
   select(state, potus_run_reelect, mean_house_percent_vote, per_capita_personal_income, population, yoy_per_cap_income_change, lag_participation, lag_pres_vote) %>% View()
+
+
+### GLM MODEL
+president <- president %>% 
+  mutate(pres_win = if_else(pres_percent_vote >= 50, 1, 0))
+
+
+president$pres_win[president$state_fips == 28 & president$year == 1976] <- 1 #Mississippi
+president$pres_win[president$state_fips == 36 & president$year %in% c(1976, 1992)] <- rep(1, 2) #New York
+president$pres_win[president$state_fips == 39 & president$year %in% c(1976, 1992, 1996)] <- rep(1, 3) #Ohio
+president$pres_win[president$state_fips == 55 & president$year %in% c(1976, 1992, 1996, 2000, 2004)] <- rep(1, 5) #Wisconsin
+president$pres_win[president$state_fips == 15 & president$year %in% c(1980, 1992)] <- rep(1, 2) #Hawaii
+president$pres_win[president$state_fips == 24 & president$year %in% c(1980, 1992)] <- rep(1, 2) #New York
+president$pres_win[president$state_fips == 44 & president$year %in% c(1980, 1992)] <- rep(1, 2) #Rhode Island
+president$pres_win[president$state_fips == 27 & president$year %in% c(1980, 1984, 1992, 2016)] <- rep(1, 2) #Minnesota
+president$pres_win[president$state_fips == 54 & president$year %in% c(1980, 1992)] <- rep(1, 2) # West Virginia
+president$pres_win[president$state_fips == 6 & president$year == 1992] <- 1 #California
+president$pres_win[president$state_fips == 8 & president$year %in% c(1992, 2016)] <- 1 #Colorado
+president$pres_win[president$state_fips == 9 & president$year == 1992] <- 1 #Connecticut
+president$pres_win[president$state_fips == 10 & president$year == 1992] <- 1 #Delaware
+president$pres_win[president$state_fips == 13 & president$year == 1992] <- 1 #Georgia
+president$pres_win[president$state_fips == 17 & president$year == 1992] <- 1 #Illinois
+president$pres_win[president$state_fips == 19 & president$year %in% c(1992, 2000)] <- rep(1, 2) #Iowa
+president$pres_win[president$state_fips == 21 & president$year %in% c(1992, 1996)] <- rep(1, 2) #Kentucky
+president$pres_win[president$state_fips == 22 & president$year == 1992] <- 1 #Louisiana
+president$pres_win[president$state_fips == 23 & president$year %in% c(1992, 2000, 2016)] <- rep(1, 3) #Maine
+president$pres_win[president$state_fips == 25 & president$year == 1992] <- 1 #Massachusetts
+president$pres_win[president$state_fips == 26 & president$year == 1992] <- 1 #Michigan
+president$pres_win[president$state_fips == 29 & president$year %in% c(1992, 1996)] <- rep(1, 2) #Missouri
+president$pres_win[president$state_fips == 30 & president$year == 1992] <- 1 #Montana
+president$pres_win[president$state_fips == 34 & president$year == 1992] <- 1 #New Jersey
+president$pres_win[president$state_fips == 32 & president$year %in% c(1992, 1996, 2016)] <- rep(1, 3) #Nevada
+president$pres_win[president$state_fips == 33 & president$year %in% c(1992, 1996, 2016)] <- rep(1, 3) #New Hampshire
+president$pres_win[president$state_fips == 35 & president$year %in% c(1992, 1996, 2000, 2016)] <- rep(1, 4) #New Mexico
+president$pres_win[president$state_fips == 41 & president$year %in% c(1992, 1996, 2000)] <- rep(1, 3) #Oregon
+president$pres_win[president$state_fips == 42 & president$year %in% c(1992, 1996)] <- rep(1, 2) #Pennsylvania
+president$pres_win[president$state_fips == 47 & president$year %in% c(1992, 1996)] <- rep(1, 2) #Tennessee
+president$pres_win[president$state_fips == 50 & president$year == 1992] <- 1 #Vermont
+president$pres_win[president$state_fips == 4 & president$year == 1996] <- 1 #Arizona
+president$pres_win[president$state_fips == 12 & president$year == 1996] <- 1 #Florida
+president$pres_win[president$state_fips == 18 & president$year == 2008] <- 1 #Indiana
+president$pres_win[president$state_fips == 37 & president$year == 2008] <- 1 #North Carolina
+president$pres_win[president$state_fips == 51 & president$year == 2016] <- 1 #Virginia
+president$pres_win[president$state_fips == 53 & president$year %in% c(1992, 1996)] <- rep(1, 2) #Washington
+
+
+
+
