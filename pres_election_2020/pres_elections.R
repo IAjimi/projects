@@ -30,14 +30,15 @@ senate <- senate %>%
   summarize(mean_senate_percent_vote = mean(senate_percent_vote, na.rm = T)) 
 
 house <- house %>% 
+  mutate(party = case_when(
+    state == 'Vermont' & candidate %in% c('Bernard Sanders', 'Bernie Sanders') ~ 'democrat',
+    T ~ party
+  )) %>%
   filter(party == 'democrat') %>%
-  mutate(house_percent_vote = 100 * candidatevotes / totalvotes,
-         year = year + 2) %>%
-  select(year, state, state_po, state_fips, house_candidatevotes = candidatevotes, house_percent_vote) %>%
+  mutate(year = year + 2) %>%
+  select(year, state, state_po, state_fips, candidatevotes, totalvotes) %>%
   group_by(year, state, state_po, state_fips) %>%
-  summarize(mean_house_percent_vote = mean(house_percent_vote, na.rm = T),
-            sd_house_percent_vote = sd(house_percent_vote, na.rm = T)) %>%
-  mutate(sd_house_percent_vote = replace_na(sd_house_percent_vote, 0))
+  summarize(house_percent_vote = 100 * sum(candidatevotes) / sum(totalvotes))
 
 pres_participation <- president %>% distinct(year, state_fips, totalvotes)
 
@@ -585,6 +586,12 @@ president <- rbind(filter(president, year < 2020), president2020)
 ## MISSING DATA
 president %>% filter(is.na(black_pop)) %>% distinct(year)
 
+## FIXING 2000s
+president <- president %>%
+  mutate(per_white = if_else(year == 2000, per_white / 2, per_white),
+         per_black = if_else(year == 2000, per_black / 2, per_black),
+         per_fem = if_else(year == 2000, per_fem / 2, per_fem))
+
 ## FINAL TOUCH: REMOVING DC & ADDING LAGGED VARIABLES
 president <- president %>%
   filter(state != 'District of Columbia') %>%
@@ -643,7 +650,7 @@ president$pres_win[president$state_fips == 53 & president$year %in% c(1992, 1996
 
 ## STATISTICAL ANALYSIS ####
 ## Relevant Variables
-test_years <- test_years[test_years >= 2004]
+test_years <- election_years[election_years >= 2004]
 
 electoral_votes <- c(9, 3, 11, 6, 55, 9, 7, 3, 29, 16, 4, 4, 20, 11, 6, 6,
                      8, 8, 4, 10, 11, 16, 10, 6, 10, 3, 5, 6, 4, 14, 5, 29,
@@ -656,7 +663,7 @@ ts_backward_selection(president,
                       "pres_percent_vote", 
                       c("year", "potus_run_reelect",
                         "incumbent_party * zscore_pcpi",
-                        "mean_house_percent_vote", "sd_house_percent_vote",
+                        "house_percent_vote", 
                         "population",
                         "poll_trend",
                         "lag_pres_vote",
@@ -667,7 +674,7 @@ ts_backward_selection(president,
                         "per_fem" ), test_years, model = 'lm', acc_metric = "mse")
 
 fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(leftover_preds, collapse = "+"))) #adjusting formula
-# pres_percent_vote ~ mean_house_percent_vote + poll_trend + lag_pres_vote + per_hs_degree + per_black + per_white + per_fem
+# pres_percent_vote ~ house_percent_vote + poll_trend + lag_pres_vote + per_black + per_white
 
 ## Create DF with Predictions
 reg <- lm(fmla, data = president)
@@ -744,13 +751,14 @@ pred_win %>%
 exported_df <- president %>%
   select(state, year, 
          pres_percent_vote,
-         mean_house_percent_vote, poll_trend, lag_pres_vote,
-         per_hs_degree, per_black, per_white, per_fem) %>%
+         house_percent_vote, poll_trend, lag_pres_vote,
+         per_black, per_white) %>%
   mutate(pres_percent_vote = round(pres_percent_vote, 2),
          lower_pred = predict(reg, president, 
                               interval="prediction",se.fit=T)$fit[, 'lwr'] %>% round(2),
          pred = predict(reg, president) %>% round(2),
          upper_pred = predict(reg, president,
                               interval="prediction",se.fit=T)$fit[, 'upr'] %>% round(2),
+         prob_win = 100 * predict(glm_reg, pred_win, type = 'response') %>% round(4)
   ) %>%
   filter(year > 1976)
