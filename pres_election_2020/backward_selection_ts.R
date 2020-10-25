@@ -36,7 +36,7 @@ time_series_test_split <- function(data, y, fmla, test_years, model = 'lm', acc_
       }
     
       reg_error <- predicted_res - actual_res
-      test_metric <- length(reg_error[reg_error == 0]) / length(predicted_res[!is.na(predicted_res)])
+      test_metric <- length(reg_error[reg_error == 0]) / length(reg_error[!is.na(reg_error)])
     }
     
     all_test_metric[i] <- test_metric

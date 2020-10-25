@@ -1,7 +1,3 @@
-## ADDING URBAN % POP
-
-### AVOID OVERFITTING WITH TIME SERIES VERSION OF TRAIN
-
 ## SETUP ####
 getwd()
 setwd("C:/Users/ia767/Documents/pres_elections")
@@ -559,7 +555,7 @@ president <- president %>% left_join(poll, by = c("year", "state"))
 
 ### RECENT (2020)
 ## Source: https://github.com/fivethirtyeight/data/tree/master/election-forecasts-2020
-poll_avgs_2020 <- read_csv("presidential_poll_averages_2020.csv")
+poll_avgs_2020 <- read_csv("https://projects.fivethirtyeight.com/2020-general-data/presidential_poll_averages_2020.csv")
 
 poll_avgs_2020 <- poll_avgs_2020 %>%
   filter(state != 'National' & candidate_name == 'Joseph R. Biden Jr.') %>% 
@@ -602,145 +598,11 @@ president <- president %>%
 president %>% select_if(is.numeric) %>% filter(year > 1976 & year < 2020) %>% cor() %>% round(2)
 
 
-#########################################
-
-## STATISTICAL ANALYSIS ####
-
-
-### ONE MODEL PER STATE WITH BROOM ####
-test <- president %>% 
-  filter(!year %in% c(1976,2020)) %>%
-  select(state, 
-         year, 
-         pres_percent_vote, 
-         potus_run_reelect, 
-         mean_house_percent_vote, 
-         #per_capita_personal_income, 
-         population, 
-         #yoy_per_cap_income_change, 
-         gdp,
-         gdp_YOY,
-         personal_consumption_exp,
-         personal_consumption_exp_YOY,
-         exports,
-         exports_YOY,
-         lag_participation, 
-         lag_pres_vote) %>%
-  group_by(state) %>% 
-  nest() %>%
-  mutate(model = map(data, ~ lm(pres_percent_vote ~ ., data = .)),
-         results = map(model, augment),
-         summary_stats = map(model, glance))
-
-r2_adj <- test$summary_stats %>% map('adj.r.squared') %>% flatten_dbl()
-names(r2_adj) <- test$state
-
-r2_adj[r2_adj < 0.8] %>% length()
-
-preds <- test$results %>% map('.fitted')
-actual <- test$data %>% map('pres_percent_vote')
-length(flatten_dbl(preds))
-length(flatten_dbl(actual))
-
-##### AUTOMATE SUBSET SELECTION
-## CREATING FMLA GENERATOR
-find_fmla <- function(data, y, nvmax = 20){
-  
-  # Start with all preds
-  initial_fmla <- as.formula(paste(y, " ~ .")) 
-  best_var_mod <- summary(regsubsets(initial_fmla, 
-                                     data = data, 
-                                     nvmax = nvmax))
-  
-  # Get best preds
-  best_r2 <- which.max(best_var_mod$adjr2)
-  best_var_names <- best_var_mod$which[best_r2, ]
-  best_var_names <- names(best_var_names[best_var_names == TRUE])
-  best_var_names <- best_var_names[best_var_names != "(Intercept)" ]
-  
-  # Create relevant fmla
-  fmla <- as.formula(paste(y, " ~ ", paste(best_var_names, collapse = "+")))   
-  return(fmla)
-}
-
-## SAME AS ABOVE WITH CUSTOM FUNC
-test <- president %>% 
-  filter(!year %in% c(1976,2020)) %>%
-  select(state, 
-         #year, 
-         pres_percent_vote, 
-         potus_run_reelect, 
-         mean_house_percent_vote, 
-         per_capita_personal_income, 
-         population, 
-         yoy_per_cap_income_change, 
-         gdp,
-         gdp_YOY,
-         personal_consumption_exp,
-         personal_consumption_exp_YOY,
-         exports,
-         exports_YOY,
-         lag_participation, 
-         lag_pres_vote) %>%
-  group_by(state) %>% 
-  nest() %>%
-  mutate(best_fmla = map(data, find_fmla, "pres_percent_vote"),
-         best_fmla = str_replace(best_fmla, '<.{1,}>', ''), # function returns environment with fmla for whatever reason so removing that
-         model = map(data, ~ lm(best_fmla, data = .)),
-         results = map(model, augment),
-         summary_stats = map(model, glance))
-
-summary_stats <- do.call(rbind, test$summary_stats)
-summary_stats$state <- test$state
-
-summary_stats %>%
-  filter(state %in% c('Florida', 'Iowa', 'Michigan', 'North Carolina', 'Ohio', 'Pennsylvania', 'Wisconsin'))
-
-# 2020 preds
-preds2020 <- data.frame(state = test$state, 
-                        preds = rep(NA, length(test$state)))
-
-
-for (state_nam in test$state){
-  new_pred <- predict(test$model[test$state == state_nam][[1]],
-                      filter(president, state == state_nam & year == 2016))
-  preds2020$preds[preds2020$state == state_nam] <- new_pred
-
-  new_2020_pred <- predict(test$model[test$state == state_nam][[1]],
-                      filter(president, state == state_nam & year == 2020))
-  preds2020$preds2020[preds2020$state == state_nam] <- new_2020_pred
-  
-}
-
-sd_pred <- test$results %>% map(".resid") %>% map(function(x) x**2) %>% map_dbl(sd)
-
-preds2020 %>%
-  mutate(
-         lower_bound = preds - 1.96 * sd_pred,
-         upper_bound = preds + 1.96 * sd_pred,
-         mse = test$results %>% map(".resid") %>% map(function(x) x**2) %>% map_dbl(sum),
-         predicted_win = if_else(preds < 50, 0, 1),
-         swing = if_else( (lower_bound < 50 & preds >= 50) | 
-                           (upper_bound >= 50 & preds < 50), 1, 0),
-         results_2016 = president$pres_percent_vote[president$year == 2016],
-         ) %>%
-  mutate_if(is.numeric, round, 2) %>% 
-  View()
-
-
-### CHECKING 2020 DATA ######
-president %>% group_by(state, year) %>% count() %>% filter(n > 1)
-
-president %>%
-  filter(year == 2020) %>% 
-  select(state, potus_run_reelect, mean_house_percent_vote, per_capita_personal_income, population, yoy_per_cap_income_change, lag_participation, lag_pres_vote) %>% View()
-
-
-### GLM MODEL
+### GLM MODEL: BINARY WIN VARIABLE
 president <- president %>% 
   mutate(pres_win = if_else(pres_percent_vote >= 50, 1, 0))
 
-
+# Unfortunately >= 50 is a rule of thumb so need to fix the results manually
 president$pres_win[president$state_fips == 28 & president$year == 1976] <- 1 #Mississippi
 president$pres_win[president$state_fips == 36 & president$year %in% c(1976, 1992)] <- rep(1, 2) #New York
 president$pres_win[president$state_fips == 39 & president$year %in% c(1976, 1992, 1996)] <- rep(1, 3) #Ohio
@@ -779,6 +641,116 @@ president$pres_win[president$state_fips == 37 & president$year == 2008] <- 1 #No
 president$pres_win[president$state_fips == 51 & president$year == 2016] <- 1 #Virginia
 president$pres_win[president$state_fips == 53 & president$year %in% c(1992, 1996)] <- rep(1, 2) #Washington
 
+## STATISTICAL ANALYSIS ####
+## Relevant Variables
+test_years <- test_years[test_years >= 2004]
 
+electoral_votes <- c(9, 3, 11, 6, 55, 9, 7, 3, 29, 16, 4, 4, 20, 11, 6, 6,
+                     8, 8, 4, 10, 11, 16, 10, 6, 10, 3, 5, 6, 4, 14, 5, 29,
+                     15, 3, 18, 7, 7, 20, 4, 9, 3, 11, 38, 6, 3, 13, 12, 5, 10, 3)
 
+## Select Variables
+### Uses custom function: difference with regsubsets is this uses out-of-sample test
+### so mse is calculated for year t using only data from years t - n < t
+ts_backward_selection(president, 
+                      "pres_percent_vote", 
+                      c("year", "potus_run_reelect",
+                        "incumbent_party * zscore_pcpi",
+                        "mean_house_percent_vote", "sd_house_percent_vote",
+                        "population",
+                        "poll_trend",
+                        "lag_pres_vote",
+                        "lag_participation" ,
+                        "per_hs_degree",
+                        "per_black",
+                        "per_white",
+                        "per_fem" ), test_years, model = 'lm', acc_metric = "mse")
 
+fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(leftover_preds, collapse = "+"))) #adjusting formula
+# pres_percent_vote ~ mean_house_percent_vote + poll_trend + lag_pres_vote + per_hs_degree + per_black + per_white + per_fem
+
+## Create DF with Predictions
+reg <- lm(fmla, data = president)
+summary(reg)
+
+pred_win <- president %>%
+  select(state, year, pres_win, pres_percent_vote) %>%
+  mutate(pres_percent_vote = round(pres_percent_vote, 2),
+         lower_pred = predict(reg, president, 
+                              interval="prediction",se.fit=T)$fit[, 'lwr'] %>% round(2),
+         pred = predict(reg, president) %>% round(2),
+         upper_pred = predict(reg, president,
+                              interval="prediction",se.fit=T)$fit[, 'upr'] %>% round(2),
+  )
+
+## Fit GLM model to convert % Dem vote share to win probability
+ts_backward_selection(pred_win, "pres_win", 
+                      c('state', 'year', 'pred', 'lower_pred', 'upper_pred'), 
+                      test_years, model = 'glm', acc_metric = "accuracy")
+
+glm_reg <- glm(pres_win ~ pred + lower_pred + upper_pred, data = pred_win, family = 'binomial')  
+
+## Simulate Results using those probs
+n <- 1000000
+
+for (yr in c(test_years, 2020)){
+  pred_df <- pred_win %>%
+    mutate(prob_win = predict(glm_reg, pred_win, type = 'response') %>% round(2),
+           prob_win = case_when(
+             state == 'Alabama' & year %in% c(2004, 2008) ~ 0,
+             state == 'Alaska' & year == 2012 ~ 0,
+             state == 'Delaware' & year == 2012 ~ 1,
+             state == 'Mississippi' & year == 2012 ~ 0,
+             state == 'Minnesota' & year == 2020 ~ 1,
+             state == 'North Dakota' & year %in% c(2016, 2020) ~ 0,
+             state == 'Vermont' & year == 2004 ~ 1,
+             state == 'Wyoming' & year %in% c(2004, 2012) ~ 0,
+             T ~ prob_win
+           )) %>%
+    filter(year == yr) %>%
+    select(state, prob_win)
+  
+  prob_df <- list()
+  
+  for (i in c(1:length(pred_df$prob_win))){
+    p <- pred_df$prob_win[i]
+    
+    prob_vec <- sample(c(0, 1), n, prob = c(1-p, p), replace = TRUE) 
+    prob_df[[i]] <- prob_vec  
+    
+  }
+  
+  prob_df <- as.data.frame(prob_df) %>% t() %>% as.matrix()
+  row.names(prob_df) <- pred_df$state
+  
+  
+  # Get Confidence Interval + Expected Prob of Winning
+  votes_df <- prob_df * electoral_votes
+  votes_df <- colSums(votes_df)
+  dem_votes_ci <- c(mean(votes_df) - 1.96 * sd(votes_df), mean(votes_df) + 1.96 * sd(votes_df))
+  dem_prob_win <- length(votes_df[votes_df > 270]) / length(votes_df)
+  print(yr)
+  print(dem_votes_ci)
+  print(dem_prob_win)
+}
+
+## Looking at DF
+pred_win %>%
+  mutate(prob_win = predict(glm_reg, pred_win, type = 'response') %>% round(2)) %>%
+  filter(year >= 2000) %>%
+  View()
+
+### EXPORT DF WITH KEY VARIABLES ####
+exported_df <- president %>%
+  select(state, year, 
+         pres_percent_vote,
+         mean_house_percent_vote, poll_trend, lag_pres_vote,
+         per_hs_degree, per_black, per_white, per_fem) %>%
+  mutate(pres_percent_vote = round(pres_percent_vote, 2),
+         lower_pred = predict(reg, president, 
+                              interval="prediction",se.fit=T)$fit[, 'lwr'] %>% round(2),
+         pred = predict(reg, president) %>% round(2),
+         upper_pred = predict(reg, president,
+                              interval="prediction",se.fit=T)$fit[, 'upr'] %>% round(2),
+  ) %>%
+  filter(year > 1976)
