@@ -5,4 +5,5 @@ Ongoing data exploration & analysis projects
 * Wine Reviews: data exploration of wine reviews from WineEnthouasiast. KNN wine-variety classifier. Python.
 * Quick Plots: comparing makeup brand's highlighters' foundating range, looking at change in housing prices in the U.S., etc. R.
 * Oscar Prediction Model: predicting the Oscars! includes sample code & *on the record* predictions for the 2019 & 2020 Oscars. R.
+* 2020 Presidential Election Prediction Model: predicting the winner of each State for the 2020 U.S. Presidential election. includes data collection & model preparation code & *on the record* predictions. R.
 
