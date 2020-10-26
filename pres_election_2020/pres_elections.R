@@ -598,7 +598,11 @@ president <- president %>%
   split(.$state) %>%
   map(mutate, 
       lag_pres_vote = lag(pres_percent_vote),
-      lag_participation = lag(totalvotes / population)) %>%
+      lag_participation = lag(totalvotes / population),
+      change_lag_pres_vote = (lag_pres_vote - lag(lag_pres_vote)) / lag(lag_pres_vote),
+      change_house_percent_vote = (house_percent_vote - lag(house_percent_vote)) / lag(house_percent_vote),
+      change_poll_trend = (poll_trend - lag(poll_trend)) / lag(poll_trend)
+      ) %>%
   do.call(rbind, .)
 
 ## CHECKING CORRELATION
@@ -669,12 +673,16 @@ ts_backward_selection(president,
                         "lag_pres_vote",
                         "lag_participation" ,
                         "per_hs_degree",
-                        "per_black",
+                        #"per_black",
                         "per_white",
-                        "per_fem" ), test_years, model = 'lm', acc_metric = "mse")
+                        "per_fem",
+                        "change_poll_trend",
+                        "change_house_percent_vote",
+                        "change_lag_pres_vote"), test_years, model = 'lm', acc_metric = "mse")
 
 fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(leftover_preds, collapse = "+"))) #adjusting formula
-# pres_percent_vote ~ house_percent_vote + poll_trend + lag_pres_vote + per_black + per_white
+## FORMER: pres_percent_vote ~ house_percent_vote + poll_trend + lag_pres_vote + per_black + per_white
+## CURRENT: pres_percent_vote ~  year + poll_trend + lag_pres_vote + lag_participation + per_white + change_poll_trend + change_house_percent_vote
 
 ## Create DF with Predictions
 reg <- lm(fmla, data = president)
@@ -702,18 +710,7 @@ n <- 1000000
 
 for (yr in c(test_years, 2020)){
   pred_df <- pred_win %>%
-    mutate(prob_win = predict(glm_reg, pred_win, type = 'response') %>% round(2),
-           prob_win = case_when(
-             state == 'Alabama' & year %in% c(2004, 2008) ~ 0,
-             state == 'Alaska' & year == 2012 ~ 0,
-             state == 'Delaware' & year == 2012 ~ 1,
-             state == 'Mississippi' & year == 2012 ~ 0,
-             state == 'Minnesota' & year == 2020 ~ 1,
-             state == 'North Dakota' & year %in% c(2016, 2020) ~ 0,
-             state == 'Vermont' & year == 2004 ~ 1,
-             state == 'Wyoming' & year %in% c(2004, 2012) ~ 0,
-             T ~ prob_win
-           )) %>%
+    mutate(prob_win = predict(glm_reg, pred_win, type = 'response') %>% round(2)) %>%
     filter(year == yr) %>%
     select(state, prob_win)
   
@@ -722,9 +719,15 @@ for (yr in c(test_years, 2020)){
   for (i in c(1:length(pred_df$prob_win))){
     p <- pred_df$prob_win[i]
     
-    prob_vec <- sample(c(0, 1), n, prob = c(1-p, p), replace = TRUE) 
-    prob_df[[i]] <- prob_vec  
-    
+    if (!is.na(p)){
+      prob_vec <- sample(c(0, 1), n, prob = c(1-p, p), replace = TRUE) 
+      prob_df[[i]] <- prob_vec  
+    } else{
+      rule_of_thumb_prob <- c("Alabama" = 0, "Alaska" = 0, "Delaware" = 1, "Mississippi" = 0, "Minnesota" = 1,
+                              "North Dakota" = 0, "Vermont" = 1, "Wyoming" = 0)
+      p <- rule_of_thumb_prob[pred_df$state[i]]
+      prob_df[[i]] <- rep(p, n) 
+    }
   }
   
   prob_df <- as.data.frame(prob_df) %>% t() %>% as.matrix()
@@ -735,7 +738,7 @@ for (yr in c(test_years, 2020)){
   votes_df <- prob_df * electoral_votes
   votes_df <- colSums(votes_df)
   dem_votes_ci <- c(mean(votes_df) - 1.96 * sd(votes_df), mean(votes_df) + 1.96 * sd(votes_df))
-  dem_prob_win <- length(votes_df[votes_df > 270]) / length(votes_df)
+  dem_prob_win <- length(votes_df[votes_df >= 270]) / length(votes_df)
   print(yr)
   print(dem_votes_ci)
   print(dem_prob_win)
@@ -750,9 +753,9 @@ pred_win %>%
 ### EXPORT DF WITH KEY VARIABLES ####
 exported_df <- president %>%
   select(state, year, 
-         pres_percent_vote,
-         house_percent_vote, poll_trend, lag_pres_vote,
-         per_black, per_white) %>%
+         pres_win, pres_percent_vote,
+         poll_trend, lag_pres_vote, lag_participation,
+         per_white, change_poll_trend, change_house_percent_vote) %>%
   mutate(pres_percent_vote = round(pres_percent_vote, 2),
          lower_pred = predict(reg, president, 
                               interval="prediction",se.fit=T)$fit[, 'lwr'] %>% round(2),
@@ -762,3 +765,6 @@ exported_df <- president %>%
          prob_win = 100 * predict(glm_reg, pred_win, type = 'response') %>% round(4)
   ) %>%
   filter(year > 1976)
+
+prediction_export <- exported_df %>% filter(year >= 2020) %>% select(state, lower_pred, pred, upper_pred, prob_win)
+write.csv(prediction_export, 'state_probabilities.csv')

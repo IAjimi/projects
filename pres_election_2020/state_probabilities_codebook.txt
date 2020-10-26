@@ -1,0 +1,5 @@
+state: state name
+lower_pred: lower bound of 95% C.I. of prediction
+pred: point estimate of predicted % of votes for Democrat candidate
+upper_pred: upper bound of 95% C.I. of prediction
+prob_win: probability of Democrat candidate winning the state in 2020
