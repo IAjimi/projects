@@ -692,7 +692,7 @@ possible_predictors <- c("year",
 ## Select Variables & Compare Models
 ### Uses custom function: difference with regsubsets is this uses out-of-sample test
 ### so mse is calculated for year t using only data from years t - n < t
-training <- president %>% select_if(names(.) %in% c('pres_percent_vote', possible_predictors))
+training <- president %>% select_if(names(.) %in% c('pres_percent_vote','incumbent_party', 'zscore_pcpi', possible_predictors))
 training <- training[complete.cases(training), ] 
 
 for (model in c('lm', 'pls', 'ridge', 'lasso')){
