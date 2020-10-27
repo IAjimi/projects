@@ -8,6 +8,8 @@ library(readxl)
 library(tidyverse)
 library(leaps)
 library(broom)
+library(caret)
+library(glmnet)
 
 ### LOADING DATA
 senate <- read_csv("1976-2018-senate.csv")
@@ -43,12 +45,16 @@ house <- house %>%
 pres_participation <- president %>% distinct(year, state_fips, totalvotes)
 
 president <- president %>% 
-  filter(party == 'democrat') %>%
-  group_by(year, state, state_po, state_fips, totalvotes) %>%
+  filter(party %in% c('democrat', 'republican')) %>%
+  group_by(year, state, state_po, state_fips, party, totalvotes) %>%
   summarise(candidatevotes = sum(candidatevotes)) %>% # has to be done like this bc of writein = False or True for AZ and MD
   ungroup() %>%
   mutate(pres_percent_vote = 100 * candidatevotes / totalvotes) %>%
-  select(year, state, state_po, state_fips, pres_percent_vote)
+  spread(party, pres_percent_vote) %>%
+  fill(republican, .direction = c('up')) %>%
+  filter(!is.na(democrat)) %>%
+  mutate(vote_spread = democrat - republican) %>%
+  select(year, state, state_po, state_fips, pres_percent_vote = democrat, vote_spread)
 
 ## Add 2020
 president_2020 <- president %>% 
@@ -598,6 +604,7 @@ president <- president %>%
   split(.$state) %>%
   map(mutate, 
       lag_pres_vote = lag(pres_percent_vote),
+      lag_vote_spread = lag(vote_spread),
       lag_participation = lag(totalvotes / population),
       change_lag_pres_vote = (lag_pres_vote - lag(lag_pres_vote)) / lag(lag_pres_vote),
       change_house_percent_vote = (house_percent_vote - lag(house_percent_vote)) / lag(house_percent_vote),
@@ -660,12 +667,50 @@ electoral_votes <- c(9, 3, 11, 6, 55, 9, 7, 3, 29, 16, 4, 4, 20, 11, 6, 6,
                      8, 8, 4, 10, 11, 16, 10, 6, 10, 3, 5, 6, 4, 14, 5, 29,
                      15, 3, 18, 7, 7, 20, 4, 9, 3, 11, 38, 6, 3, 13, 12, 5, 10, 3)
 
-## Select Variables
+## Select Variables & Compare Models
 ### Uses custom function: difference with regsubsets is this uses out-of-sample test
 ### so mse is calculated for year t using only data from years t - n < t
+training <- president %>% 
+  select(year, pres_percent_vote, poll_trend, lag_pres_vote, lag_vote_spread, lag_participation, per_white, change_house_percent_vote, change_poll_trend,
+         incumbent_party, zscore_pcpi, house_percent_vote, population, per_hs_degree, per_fem, change_lag_pres_vote)
+
+training <- training[complete.cases(training), ] 
+
+for (model in c('lm', 'pls', 'ridge', 'lasso')){
+  print(model)
+  
+  ts_backward_selection(training, 
+                        "pres_percent_vote", 
+                        c("year", 
+                          "incumbent_party * zscore_pcpi",
+                          "house_percent_vote", 
+                          "population",
+                          "poll_trend",
+                          "lag_pres_vote",
+                          "lag_participation" ,
+                          "per_hs_degree",
+                          #"per_black",
+                          "per_white",
+                          "per_fem",
+                          "change_poll_trend",
+                          "change_house_percent_vote",
+                          "change_lag_pres_vote",
+                          "lag_vote_spread"), test_years, model = model, acc_metric = "mse")
+  print(best_metric[!is.na(best_metric)])
+  
+  fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(leftover_preds, collapse = "+"))) #adjusting formula
+  tsts_metric <- time_series_test_split(training, "pres_percent_vote", fmla, test_years, model = model, acc_metric = "mse")
+  print(mean(tsts_metric))
+  print(median(tsts_metric))
+  
+}
+# FORMER: pres_percent_vote ~ house_percent_vote + poll_trend + lag_pres_vote + per_black + per_white
+# CURRENT: pres_percent_vote ~  year + poll_trend + lag_pres_vote + lag_participation + per_white + change_poll_trend + change_house_percent_vote
+
+## Create DF with Predictions (LM)
 ts_backward_selection(president, 
                       "pres_percent_vote", 
-                      c("year", "potus_run_reelect",
+                      c("year", 
                         "incumbent_party * zscore_pcpi",
                         "house_percent_vote", 
                         "population",
@@ -679,12 +724,7 @@ ts_backward_selection(president,
                         "change_poll_trend",
                         "change_house_percent_vote",
                         "change_lag_pres_vote"), test_years, model = 'lm', acc_metric = "mse")
-
-fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(leftover_preds, collapse = "+"))) #adjusting formula
-## FORMER: pres_percent_vote ~ house_percent_vote + poll_trend + lag_pres_vote + per_black + per_white
-## CURRENT: pres_percent_vote ~  year + poll_trend + lag_pres_vote + lag_participation + per_white + change_poll_trend + change_house_percent_vote
-
-## Create DF with Predictions
+fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(leftover_preds, collapse = "+")))
 reg <- lm(fmla, data = president)
 summary(reg)
 
@@ -703,7 +743,7 @@ ts_backward_selection(pred_win, "pres_win",
                       c('state', 'year', 'pred', 'lower_pred', 'upper_pred'), 
                       test_years, model = 'glm', acc_metric = "accuracy")
 
-glm_reg <- glm(pres_win ~ pred + lower_pred + upper_pred, data = pred_win, family = 'binomial')  
+glm_reg <- glm(pres_win ~ pred + upper_pred + lower_pred, data = pred_win, family = 'binomial')  
 
 ## Simulate Results using those probs
 n <- 1000000
@@ -765,6 +805,7 @@ exported_df <- president %>%
          prob_win = 100 * predict(glm_reg, pred_win, type = 'response') %>% round(4)
   ) %>%
   filter(year > 1976)
+#write.csv(exported_df, paste('election_df_', Sys.Date(), '.csv', sep = '_'))
 
 prediction_export <- exported_df %>% filter(year >= 2020) %>% select(state, lower_pred, pred, upper_pred, prob_win)
-write.csv(prediction_export, 'state_probabilities.csv')
+#write.csv(prediction_export, paste('state_probabilities_', Sys.Date(), '.csv', sep = '_'))
