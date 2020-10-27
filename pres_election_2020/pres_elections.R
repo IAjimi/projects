@@ -75,8 +75,8 @@ president <- president %>%
       year >= 2012 & year <= 2016 ~ 0,
       year == 2020 ~ 1
     ),
-    potus_run_reelect = case_when( # POTUS running for reelection?
-      year == 1976 ~ 1, # check
+    potus_run_reelect = case_when( # POTUS running for reelection
+      year == 1976 ~ 1,
       year == 1980 ~ 1,
       year == 1984 ~ 1,
       year == 1988 ~ 0,
@@ -105,8 +105,8 @@ president <- president %>%
 ## ECONOMIC DATA ####
 ## Personal Income by State
 ## Source: https://www.bea.gov/ (SQINC1)
-bea_personal_income_state <- read_excel("bea_personal_income_state.xls", 
-                                        skip = 5)
+bea_personal_income_state <- read_excel("bea_personal_income_state.xls", skip = 5)
+
 # Cleaning Df
 bea_personal_income_state <- bea_personal_income_state %>% 
   gather(year, val, `1976`:`2019`) %>%
@@ -124,6 +124,7 @@ president <- president %>%
   left_join(bea_personal_income_state, by = c("year", "state"))
 
 # Add YoY Change + Z score var
+## in this case, zscore of pcpi using mean of previous 2 years (idea from 538)
 president <- president %>%
   split(.$state) %>%
   map(mutate, 
@@ -195,7 +196,7 @@ high_school_degree <- high_school_degree %>%
 # Changing dates so they'll map to election years in president df
 new_high_school_degree <- data.frame()
 
-for (yr in election_years[election_years <= 2010 & !election_years %in% c(1980, 2000)]) { ## NEED FRESHER DATA
+for (yr in election_years[election_years <= 2010 & !election_years %in% c(1980, 2000)]) { ## using decade to fill all other elections - stale data, could be improved
   
   decade_yr <- substring(yr, 1, 3) # get decade
   
@@ -219,7 +220,7 @@ bachelor_degree <- bachelor_degree %>%
 # Changing dates so they'll map to election years in president df
 new_bachelor_degree <- data.frame()
 
-for (yr in election_years[election_years <= 2010 & !election_years %in% c(1980, 2000)]) { ## see if date needs changing
+for (yr in election_years[election_years <= 2010 & !election_years %in% c(1980, 2000)]) { ## could also get fresher data here
   
   decade_yr <- substring(yr, 1, 3) # get decade
   
@@ -310,7 +311,6 @@ degree_df <- rbind(degree_df, ACSDT1Y2019)
 
 president <- president %>%
   left_join(degree_df, by = c("state", "year"))
-
 
 ## Census Data (https://www2.census.gov/programs-surveys/popest/datasets/) ####
 ### 1970: Race of Population by County
@@ -563,7 +563,7 @@ poll <- raw_poll %>%
 
 president <- president %>% left_join(poll, by = c("year", "state"))
 
-### RECENT (2020)
+### LATEST (2020)
 ## Source: https://github.com/fivethirtyeight/data/tree/master/election-forecasts-2020
 poll_avgs_2020 <- read_csv("https://projects.fivethirtyeight.com/2020-general-data/presidential_poll_averages_2020.csv")
 
@@ -692,12 +692,7 @@ possible_predictors <- c("year",
 ## Select Variables & Compare Models
 ### Uses custom function: difference with regsubsets is this uses out-of-sample test
 ### so mse is calculated for year t using only data from years t - n < t
-training <- president %>% 
-  select(year, pres_percent_vote, poll_trend, lag_pres_vote, lag_vote_spread, lag_participation, 
-         per_white, change_house_percent_vote, change_poll_trend,
-         incumbent_party, zscore_pcpi, house_percent_vote, population, per_hs_degree, per_bachelor_degree, per_fem, change_lag_pres_vote,
-         hawaii_dummy)
-
+training <- president %>% select_if(names(.) %in% c('pres_percent_vote', possible_predictors))
 training <- training[complete.cases(training), ] 
 
 for (model in c('lm', 'pls', 'ridge', 'lasso')){
@@ -712,8 +707,6 @@ for (model in c('lm', 'pls', 'ridge', 'lasso')){
   print(median(tsts_metric))
   
 }
-# FORMER: pres_percent_vote ~ house_percent_vote + poll_trend + lag_pres_vote + per_black + per_white
-# CURRENT: pres_percent_vote ~  year + poll_trend + lag_pres_vote + lag_participation + per_white + change_poll_trend + change_house_percent_vote
 
 ## Create DF with Predictions (LM)
 ts_backward_selection(president, "pres_percent_vote", possible_predictors, test_years, model = 'lm', acc_metric = "mse")
@@ -725,11 +718,9 @@ summary(reg)
 pred_win <- president %>%
   select(state, year, pres_win, pres_percent_vote) %>%
   mutate(pres_percent_vote = round(pres_percent_vote, 2),
-         lower_pred = predict(reg, president, 
-                              interval="prediction",se.fit=T)$fit[, 'lwr'] %>% round(2),
+         lower_pred = predict(reg, president, interval="prediction",se.fit=T)$fit[, 'lwr'] %>% round(2),
          pred = predict(reg, president) %>% round(2),
-         upper_pred = predict(reg, president,
-                              interval="prediction",se.fit=T)$fit[, 'upr'] %>% round(2),
+         upper_pred = predict(reg, president, interval="prediction",se.fit=T)$fit[, 'upr'] %>% round(2),
   )
 
 ## Fit GLM model to convert % Dem vote share to win probability
@@ -800,7 +791,7 @@ exported_df <- president %>%
          prob_win = 100 * predict(glm_reg, pred_win, type = 'response') %>% round(4)
   ) %>%
   filter(year > 1976)
-#write.csv(exported_df, paste('election_df_', Sys.Date(), '.csv', sep = '_'))
+write.csv(exported_df, paste('election_df_', Sys.Date(), '.csv', sep = ''))
 
 prediction_export <- exported_df %>% filter(year >= 2020) %>% select(state, lower_pred, pred, upper_pred, prob_win)
-#write.csv(prediction_export, paste('state_probabilities_', Sys.Date(), '.csv', sep = '_'))
+write.csv(prediction_export, paste('state_probabilities_', Sys.Date(), '.csv', sep = ''))
