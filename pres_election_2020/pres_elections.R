@@ -244,14 +244,15 @@ ACSDT1Y2012 <- ACSDT1Y2012 %>%
          state_fips = as.numeric(state_fips)) %>%
   select(-id)
 
-# Get total HS or more
+# Get total HS or more + total BA or more
 ACSDT1Y2012$tot_hs <- rowSums(select(ACSDT1Y2012, "Estimate!!Total!!Regular high school diploma":"Estimate!!Total!!Doctorate degree"))
+ACSDT1Y2012$tot_ba <- rowSums(select(ACSDT1Y2012, "Estimate!!Total!!Bachelor's degree":"Estimate!!Total!!Doctorate degree"))
 
 # Complete DF
 ACSDT1Y2012 <- ACSDT1Y2012 %>%
   mutate(per_hs_degree = 100 * tot_hs / `Estimate!!Total`,
-         per_bachelor_degree = NA,
-         year = 2012) %>% # actually 2019 but doing this for preds purposes
+         per_bachelor_degree = 100 * tot_ba / `Estimate!!Total`,
+         year = 2012) %>%
   select(state = `Geographic Area Name`, year, per_hs_degree, per_bachelor_degree)
 
 ## 2016
@@ -265,14 +266,15 @@ ACSDT1Y2016 <- ACSDT1Y2016 %>%
          state_fips = as.numeric(state_fips)) %>%
   select(-id)
 
-# Get total HS or more
+# Get total HS or more + total BA or more
 ACSDT1Y2016$tot_hs <- rowSums(select(ACSDT1Y2016, "Estimate!!Total!!Regular high school diploma":"Estimate!!Total!!Doctorate degree"))
+ACSDT1Y2016$tot_ba <- rowSums(select(ACSDT1Y2016, "Estimate!!Total!!Bachelor's degree":"Estimate!!Total!!Doctorate degree"))
 
 # Complete DF
 ACSDT1Y2016 <- ACSDT1Y2016 %>%
   mutate(per_hs_degree = 100 * tot_hs / `Estimate!!Total`,
-         per_bachelor_degree = NA,
-         year = 2016) %>% # actually 2019 but doing this for preds purposes
+         per_bachelor_degree = 100 * tot_ba / `Estimate!!Total`,
+         year = 2016) %>% 
   select(state = `Geographic Area Name`, year, per_hs_degree, per_bachelor_degree)
 
 ## 2019
@@ -286,13 +288,14 @@ ACSDT1Y2019 <- ACSDT1Y2019 %>%
          state_fips = as.numeric(state_fips)) %>%
   select(-id)
 
-# Get total HS or more
+# Get total HS or more + total BA or more
 ACSDT1Y2019$tot_hs <- rowSums(select(ACSDT1Y2019, "Estimate!!Total:!!Regular high school diploma":"Estimate!!Total:!!Doctorate degree"))
+ACSDT1Y2019$tot_ba <- rowSums(select(ACSDT1Y2019, "Estimate!!Total:!!Bachelor's degree":"Estimate!!Total:!!Doctorate degree"))
 
 # Complete DF
 ACSDT1Y2019 <- ACSDT1Y2019 %>%
   mutate(per_hs_degree = 100 * tot_hs / `Estimate!!Total:`,
-         per_bachelor_degree = NA,
+         per_bachelor_degree = 100 * tot_ba / `Estimate!!Total:`,
          year = 2020) %>% # actually 2019 but doing this for preds purposes
   select(state = `Geographic Area Name`, year, per_hs_degree, per_bachelor_degree)
 
@@ -598,9 +601,10 @@ president <- president %>%
          per_black = if_else(year == 2000, per_black / 2, per_black),
          per_fem = if_else(year == 2000, per_fem / 2, per_fem))
 
-## FINAL TOUCH: REMOVING DC & ADDING LAGGED VARIABLES
+## FINAL TOUCH: REMOVING DC, ADDING HAWAII DUMMY & ADDING LAGGED VARIABLES
 president <- president %>%
   filter(state != 'District of Columbia') %>%
+  mutate(hawaii_dummy = if_else(state == 'Hawaii', 1, 0)) %>% # Hawaii has distinctly different demographics & is consistently Dem so could skew estimates
   split(.$state) %>%
   map(mutate, 
       lag_pres_vote = lag(pres_percent_vote),
@@ -660,42 +664,46 @@ president$pres_win[president$state_fips == 51 & president$year == 2016] <- 1 #Vi
 president$pres_win[president$state_fips == 53 & president$year %in% c(1992, 1996)] <- rep(1, 2) #Washington
 
 ## STATISTICAL ANALYSIS ####
-## Relevant Variables
+## Relevant Variables for Sim / Training
 test_years <- election_years[election_years >= 2004]
 
 electoral_votes <- c(9, 3, 11, 6, 55, 9, 7, 3, 29, 16, 4, 4, 20, 11, 6, 6,
                      8, 8, 4, 10, 11, 16, 10, 6, 10, 3, 5, 6, 4, 14, 5, 29,
                      15, 3, 18, 7, 7, 20, 4, 9, 3, 11, 38, 6, 3, 13, 12, 5, 10, 3)
 
+possible_predictors <- c("year", 
+  "hawaii_dummy",
+  "incumbent_party * zscore_pcpi",
+  "house_percent_vote", 
+  "population",
+  "poll_trend",
+  "lag_pres_vote",
+  "lag_participation" ,
+  "per_hs_degree",
+  "per_bachelor_degree",
+  #"per_black",
+  "per_white",
+  "per_fem",
+  "change_poll_trend",
+  "change_house_percent_vote",
+  "change_lag_pres_vote",
+  "lag_vote_spread")
+
 ## Select Variables & Compare Models
 ### Uses custom function: difference with regsubsets is this uses out-of-sample test
 ### so mse is calculated for year t using only data from years t - n < t
 training <- president %>% 
-  select(year, pres_percent_vote, poll_trend, lag_pres_vote, lag_vote_spread, lag_participation, per_white, change_house_percent_vote, change_poll_trend,
-         incumbent_party, zscore_pcpi, house_percent_vote, population, per_hs_degree, per_fem, change_lag_pres_vote)
+  select(year, pres_percent_vote, poll_trend, lag_pres_vote, lag_vote_spread, lag_participation, 
+         per_white, change_house_percent_vote, change_poll_trend,
+         incumbent_party, zscore_pcpi, house_percent_vote, population, per_hs_degree, per_bachelor_degree, per_fem, change_lag_pres_vote,
+         hawaii_dummy)
 
 training <- training[complete.cases(training), ] 
 
 for (model in c('lm', 'pls', 'ridge', 'lasso')){
   print(model)
   
-  ts_backward_selection(training, 
-                        "pres_percent_vote", 
-                        c("year", 
-                          "incumbent_party * zscore_pcpi",
-                          "house_percent_vote", 
-                          "population",
-                          "poll_trend",
-                          "lag_pres_vote",
-                          "lag_participation" ,
-                          "per_hs_degree",
-                          #"per_black",
-                          "per_white",
-                          "per_fem",
-                          "change_poll_trend",
-                          "change_house_percent_vote",
-                          "change_lag_pres_vote",
-                          "lag_vote_spread"), test_years, model = model, acc_metric = "mse")
+  ts_backward_selection(training, "pres_percent_vote", possible_predictors, test_years, model = model, acc_metric = "mse")
   print(best_metric[!is.na(best_metric)])
   
   fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(leftover_preds, collapse = "+"))) #adjusting formula
@@ -708,23 +716,9 @@ for (model in c('lm', 'pls', 'ridge', 'lasso')){
 # CURRENT: pres_percent_vote ~  year + poll_trend + lag_pres_vote + lag_participation + per_white + change_poll_trend + change_house_percent_vote
 
 ## Create DF with Predictions (LM)
-ts_backward_selection(president, 
-                      "pres_percent_vote", 
-                      c("year", 
-                        "incumbent_party * zscore_pcpi",
-                        "house_percent_vote", 
-                        "population",
-                        "poll_trend",
-                        "lag_pres_vote",
-                        "lag_participation" ,
-                        "per_hs_degree",
-                        #"per_black",
-                        "per_white",
-                        "per_fem",
-                        "change_poll_trend",
-                        "change_house_percent_vote",
-                        "change_lag_pres_vote"), test_years, model = 'lm', acc_metric = "mse")
+ts_backward_selection(president, "pres_percent_vote", possible_predictors, test_years, model = 'lm', acc_metric = "mse")
 fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(leftover_preds, collapse = "+")))
+# pres_percent_vote ~ year + hawaii_dummy + poll_trend + lag_pres_vote + lag_participation + per_white + change_house_percent_vote + lag_vote_spread
 reg <- lm(fmla, data = president)
 summary(reg)
 
@@ -739,11 +733,12 @@ pred_win <- president %>%
   )
 
 ## Fit GLM model to convert % Dem vote share to win probability
-ts_backward_selection(pred_win, "pres_win", 
-                      c('state', 'year', 'pred', 'lower_pred', 'upper_pred'), 
+ts_backward_selection(filter(pred_win, year != 1992), # removing year with strong 3rd party spoilers
+                      "pres_win", 
+                      c('year', 'pred', 'lower_pred', 'upper_pred'), 
                       test_years, model = 'glm', acc_metric = "accuracy")
-
-glm_reg <- glm(pres_win ~ pred + upper_pred + lower_pred, data = pred_win, family = 'binomial')  
+fmla <- as.formula(paste("pres_win", " ~ ", paste(leftover_preds, collapse = "+")))
+glm_reg <- glm(fmla, data = filter(pred_win, year != 1992), family = 'binomial')  
 
 ## Simulate Results using those probs
 n <- 1000000
@@ -795,7 +790,7 @@ exported_df <- president %>%
   select(state, year, 
          pres_win, pres_percent_vote,
          poll_trend, lag_pres_vote, lag_participation,
-         per_white, change_poll_trend, change_house_percent_vote) %>%
+         per_white, change_house_percent_vote, lag_vote_spread) %>%
   mutate(pres_percent_vote = round(pres_percent_vote, 2),
          lower_pred = predict(reg, president, 
                               interval="prediction",se.fit=T)$fit[, 'lwr'] %>% round(2),
