@@ -536,40 +536,34 @@ president <- president %>%
          per_black_fem = black_fem_pop / population)
 
 #### POLLING DATA ####
-### HISTORICAL (1968-2016)
-## Source: https://github.com/fivethirtyeight/data/tree/master/polls
-raw_poll <- read_csv('https://github.com/fivethirtyeight/data/raw/master/polls/pres_pollaverages_1968-2016.csv')
-
+## HISTORICAL (1968-2016), Source: https://github.com/fivethirtyeight/data/tree/master/polls
+### LATEST (2020), Source: https://github.com/fivethirtyeight/data/tree/master/election-forecasts-2020
+# Variables mapping party to candidate
 dem_pres_candidates <- c('George S. McGovern', 'Jimmy Carter',
                          'Walter F. Mondale', 'Michael S. Dukakis', 'Bill Clinton',
                          'Al Gore', 'John Kerry', 'Barack Obama',
                          'Hillary Rodham Clinton')
 
-poll <- raw_poll %>% 
-  filter(state != 'National') %>% 
-  select(year = cycle, state, candidate_name, pct_estimate, pct_trend_adjusted, modeldate, election_date) %>%
-  mutate(
-         state = case_when(
-           state %in% c('ME-1', 'ME-2') ~ 'Maine', # don't have time to adjust for change
-           state %in% c('NE-1', 'NE-2', 'NE-3') ~ 'Nebraska',
-           T ~ state
-         ),
-         modeldate = as.Date(modeldate, '%m/%d/%Y'),
-         election_date = as.Date(election_date, '%m/%d/%Y'),
-         days_to_election = election_date - modeldate) %>%
-  filter(days_to_election < 15 & candidate_name %in% dem_pres_candidates) %>%
-  group_by(year, state) %>%
-  summarise(poll_trend = mean(pct_trend_adjusted))
+rep_pres_candidates <- c('Richard M. Nixon', 'Gerald R. Ford', 'Ronald Reagan', 'George Bush',
+                         'Bob Dole', 'George W. Bush', 'John McCain', 'Mitt Romney', 'Donald Trump')
 
-president <- president %>% left_join(poll, by = c("year", "state"))
-
-### LATEST (2020)
-## Source: https://github.com/fivethirtyeight/data/tree/master/election-forecasts-2020
+# Importing Data
+raw_poll <- read_csv('https://github.com/fivethirtyeight/data/raw/master/polls/pres_pollaverages_1968-2016.csv')
 poll_avgs_2020 <- read_csv("https://projects.fivethirtyeight.com/2020-general-data/presidential_poll_averages_2020.csv")
 
+# Cleaning 2020
 poll_avgs_2020 <- poll_avgs_2020 %>%
-  filter(state != 'National' & candidate_name == 'Joseph R. Biden Jr.') %>% 
-  select(year = cycle, state, candidate_name, pct_trend_adjusted, modeldate) %>%
+  mutate(election_date = as.Date('11/03/2020', '%m/%d/%Y')) %>%
+  select(year = cycle, state, modeldate, candidate_name, pct_trend_adjusted, election_date)
+
+# Adding 2020 to Historical + Clean both
+poll_avgs <- raw_poll %>% 
+  select(year = cycle, state, modeldate, candidate_name, pct_trend_adjusted, election_date) %>%
+  mutate(election_date = as.Date(election_date, '%m/%d/%Y')) %>%
+  rbind(., poll_avgs_2020)
+
+poll_avgs <- poll_avgs %>%
+  filter(state != 'National') %>% 
   mutate(
     state = case_when(
       state %in% c('ME-1', 'ME-2') ~ 'Maine', # don't have time to adjust for change
@@ -577,19 +571,25 @@ poll_avgs_2020 <- poll_avgs_2020 %>%
       T ~ state
     ),
     modeldate = as.Date(modeldate, '%m/%d/%Y'),
-    election_date = as.Date('11/3/2020', '%m/%d/%Y'),
     days_to_election = election_date - modeldate) %>%
-  filter(days_to_election < 15) %>%
-  group_by(year, state) %>%
-  summarise(poll_trend = mean(pct_trend_adjusted))
+  filter(days_to_election <= 15)
 
-president2020 <- president %>%
-  filter(year == 2020) %>% 
-  select(- poll_trend) %>%
-  left_join(poll_avgs_2020, by = c("year", "state"))
+# Group by to get mean poll trend + poll spread
+poll_avgs <- poll_avgs %>%
+  mutate(
+    party = case_when(
+      candidate_name %in% c('Joseph R. Biden Jr.', dem_pres_candidates) ~ 'Dem',
+      candidate_name %in% rep_pres_candidates ~ 'Rep',
+      T ~ 'Ind'
+    )
+  ) %>%
+  group_by(year, state, party) %>%
+  summarise(poll_trend = mean(pct_trend_adjusted)) %>%
+  spread(party, poll_trend) %>%
+  mutate(poll_spread = Dem - Rep) %>%
+  select(year, state, poll_trend = Dem, poll_spread)
 
-president <- rbind(filter(president, year < 2020), president2020)
-
+president <- president %>% left_join(poll_avgs, by = c("year", "state"))
 
 ### ADDING VARIABLES, SCOPING MISSING DATA ####
 ## MISSING DATA
@@ -677,6 +677,7 @@ possible_predictors <- c("year",
   "house_percent_vote", 
   "population",
   "poll_trend",
+  "poll_spread",
   "lag_pres_vote",
   "lag_participation" ,
   "per_hs_degree",
@@ -724,12 +725,19 @@ pred_win <- president %>%
   )
 
 ## Fit GLM model to convert % Dem vote share to win probability
+### Note: need to look at anomalous years first
+president %>% 
+  filter(year != 2020) %>% 
+  group_by(year, pres_win) %>% 
+  summarize(pres_percent_vote = mean(pres_percent_vote)) %>% 
+  spread(pres_win, pres_percent_vote) # 1992 is clear outlier bc of strong 3rd party candidate
+
 ts_backward_selection(filter(pred_win, year != 1992), # removing year with strong 3rd party spoilers
                       "pres_win", 
                       c('year', 'pred', 'lower_pred', 'upper_pred'), 
                       test_years, model = 'glm', acc_metric = "accuracy")
 fmla <- as.formula(paste("pres_win", " ~ ", paste(leftover_preds, collapse = "+")))
-glm_reg <- glm(fmla, data = filter(pred_win, year != 1992), family = 'binomial')  
+glm_reg <- glm(fmla, data = filter(pred_win, year > 1992), family = 'binomial')  
 
 ## Simulate Results using those probs
 n <- 1000000
@@ -772,7 +780,7 @@ for (yr in c(test_years, 2020)){
 
 ## Looking at DF
 pred_win %>%
-  mutate(prob_win = predict(glm_reg, pred_win, type = 'response') %>% round(2)) %>%
+  mutate(prob_win = 100 * predict(glm_reg, pred_win, type = 'response') %>% round(4)) %>%
   filter(year >= 2000) %>%
   View()
 
