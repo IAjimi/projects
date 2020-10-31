@@ -617,7 +617,7 @@ president <- president %>%
   do.call(rbind, .)
 
 ## CHECKING CORRELATION
-president %>% select_if(is.numeric) %>% filter(year > 1976 & year < 2020) %>% cor() %>% round(2)
+president %>% select_if(is.numeric) %>% na.omit() %>% filter(year > 1976 & year < 2020) %>% cor() %>% round(2)
 
 
 ### GLM MODEL: BINARY WIN VARIABLE
@@ -786,9 +786,10 @@ pred_win %>%
 
 ### EXPORT DF WITH KEY VARIABLES ####
 exported_df <- president %>%
-  select(state, year, 
+  select(state, state_fips, year, 
          pres_win, pres_percent_vote,
          poll_trend, lag_pres_vote, lag_participation,
+         per_hs_degree, per_bachelor_degree,
          per_white, change_house_percent_vote, lag_vote_spread) %>%
   mutate(pres_percent_vote = round(pres_percent_vote, 2),
          lower_pred = predict(reg, president, 
@@ -797,9 +798,8 @@ exported_df <- president %>%
          upper_pred = predict(reg, president,
                               interval="prediction",se.fit=T)$fit[, 'upr'] %>% round(2),
          prob_win = 100 * predict(glm_reg, pred_win, type = 'response') %>% round(4)
-  ) %>%
-  filter(year > 1976)
+  )
 write.csv(exported_df, paste('election_df_', Sys.Date(), '.csv', sep = ''))
 
-prediction_export <- exported_df %>% filter(year >= 2020) %>% select(state, lower_pred, pred, upper_pred, prob_win)
+prediction_export <- exported_df %>% filter(year >= 2020) %>% select(state, fips = state_fips, lower_pred, pred, upper_pred, prob_win)
 write.csv(prediction_export, paste('state_probabilities_', Sys.Date(), '.csv', sep = ''))
