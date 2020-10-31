@@ -712,7 +712,6 @@ for (model in c('lm', 'pls', 'ridge', 'lasso')){
 ## Create DF with Predictions (LM)
 ts_backward_selection(president, "pres_percent_vote", possible_predictors, test_years, model = 'lm', acc_metric = "mse")
 fmla <- as.formula(paste("pres_percent_vote", " ~ ", paste(leftover_preds, collapse = "+")))
-# pres_percent_vote ~ year + hawaii_dummy + poll_trend + lag_pres_vote + lag_participation + per_white + change_house_percent_vote + lag_vote_spread
 reg <- lm(fmla, data = president)
 summary(reg)
 
@@ -732,12 +731,7 @@ president %>%
   summarize(pres_percent_vote = mean(pres_percent_vote)) %>% 
   spread(pres_win, pres_percent_vote) # 1992 is clear outlier bc of strong 3rd party candidate
 
-ts_backward_selection(filter(pred_win, year != 1992), # removing year with strong 3rd party spoilers
-                      "pres_win", 
-                      c('year', 'pred', 'lower_pred', 'upper_pred'), 
-                      test_years, model = 'glm', acc_metric = "accuracy")
-fmla <- as.formula(paste("pres_win", " ~ ", paste(leftover_preds, collapse = "+")))
-glm_reg <- glm(fmla, data = filter(pred_win, year > 1992), family = 'binomial')  
+glm_reg <- glm(pres_win ~ pred, data = filter(pred_win, year > 1992), family = 'binomial') # no backward selection
 
 ## Simulate Results using those probs
 n <- 1000000
